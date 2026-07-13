@@ -1,7 +1,9 @@
 package com.commute.app
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -35,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalContext
 import com.commute.app.data.CommuteEvent
@@ -88,9 +91,13 @@ fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = v
     }
 
     var currentSsid by remember { mutableStateOf<String?>(null) }
+    var locationServicesEnabled by remember { mutableStateOf(true) }
     LaunchedEffect(hasLocationPermission) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         while (true) {
             currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
+            locationServicesEnabled = locationManager == null ||
+                LocationManagerCompat.isLocationEnabled(locationManager)
             delay(3_000)
         }
     }
@@ -117,6 +124,15 @@ fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = v
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("와이파이 이름을 읽고 출퇴근을 감지하려면 위치 권한이 필요합니다.")
                     Button(onClick = { requestPermissions() }) { Text("권한 허용") }
+                }
+            }
+        } else if (!locationServicesEnabled) {
+            // Android requires the device's Location toggle to be on (separately from the
+            // app permission) to read the connected Wi-Fi's real SSID; otherwise WifiManager
+            // silently returns "<unknown ssid>" forever, which looks like a broken app.
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("위치 권한은 허용되어 있지만 기기의 위치 서비스(GPS)가 꺼져 있어 와이파이 이름을 읽을 수 없습니다. 설정에서 위치 서비스를 켜주세요.")
                 }
             }
         }
