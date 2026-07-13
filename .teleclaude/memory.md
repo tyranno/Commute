@@ -21,3 +21,12 @@
 - **권한/컴포넌트**: ACCESS_FINE_LOCATION(SSID 판독에 필수, Android 8+), POST_NOTIFICATIONS, FOREGROUND_SERVICE(_LOCATION), RECEIVE_BOOT_COMPLETED. `wifi/BootReceiver.kt`가 재부팅 후 monitoringEnabled=true면 서비스 자동 재시작.
 - **중요 빌드 트러블슈팅**: Room 어노테이션 프로세싱을 처음엔 kapt로 붙였으나 **Kotlin 2.1.0 + kapt 조합에서 반드시 실패**함 — kapt가 stub 생성 시 language version을 1.9로 낮춰도 `@Metadata` 버전은 2.1.0으로 찍히는데, Room이 내장한(jarjar) `kotlinx-metadata-jvm`은 버전 2.0.0까지만 지원해서 `IllegalArgumentException: Provided Metadata instance has version 2.1.0, while maximum supported version is 2.0.0`로 죽음. **해결: kapt를 완전히 버리고 KSP로 전환**(`id("com.google.devtools.ksp") version "2.1.0-1.0.29"`, `ksp("androidx.room:room-compiler:2.6.1")`). 이 프로젝트(및 Kotlin 2.1.0을 쓰는 다른 프로젝트)에서는 앞으로 어노테이션 프로세서가 필요하면 kapt 대신 처음부터 KSP를 쓸 것.
 - `.\gradlew.bat assembleDebug --no-daemon` 빌드 성공 확인. 실기기에서의 실제 와이파이 감지 동작은 아직 미검증(빌드 환경에 연결된 디바이스 없음) — 다음 세션에서 실기기 설치 후 회사 와이파이로 실제 테스트 필요.
+
+## 2026-07-14: 이벤트 기반 → 1분 주기 폴링 방식으로 전환
+
+- 사용자 요청: "출근은 첫감지 시간, 퇴근은 마지막 감지시간, 주기는 1분마다". 기존 `ConnectivityManager.NetworkCallback` 푸시 방식(연결/해제 시점에만 콜백)을 버리고, 포그라운드 서비스 안에서 `while(isActive) { checkWifiState(); delay(60_000) }` 코루틴 루프로 교체(`WifiMonitorService.kt`).
+- **판정 로직**: 매 틱마다 `currentWifiSsid()`로 현재 SSID를 읽어 회사 SSID와 비교. `!wasAtWork && connected`면 그 순간(now)을 ARRIVE로 기록(=첫 감지 시각). connected인 동안은 매 틱마다 `lastSeenAt`(DataStore Long)을 계속 갱신. `wasAtWork && !connected`가 되면 LEAVE 이벤트의 timestamp는 `now`가 아니라 저장해둔 `lastSeenAt`(=마지막으로 연결이 확인됐던 시각)을 사용.
+- `SettingsRepository`에 `lastSeenAt: Flow<Long?>` + `setLastSeenAt()` 추가(DataStore `longPreferencesKey`). 이게 있어야 "마지막 감지시간"을 서비스 재시작 후에도 안전하게 재구성 가능.
+- `WifiUtils.kt`의 `extractSsid(NetworkCapabilities)`는 NetworkCallback 전용이라 폴링 전환 후 미사용 → 삭제(죽은 코드 방지). `WifiMonitorService`에서 `ConnectivityManager` 관련 import/필드도 전부 제거.
+- 권한/매니페스트는 변경 없음(여전히 `currentWifiSsid()`가 ACCESS_FINE_LOCATION 필요, foregroundServiceType="location" 유지).
+- `JAVA_HOME="C:/Program Files/Android/openjdk/jdk-21.0.8" ./gradlew assembleDebug` 빌드 성공 확인. 커밋 e9725ed, GitHub push 완료. 실기기 라이브 검증은 아직 안 함(다음 세션 TODO).
