@@ -1,7 +1,6 @@
 package com.commute.app.wifi
 
 import android.content.Context
-import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 
@@ -10,12 +9,6 @@ private fun WifiInfo?.cleanSsid(): String? {
     val raw = this?.ssid ?: return null
     if (raw.isBlank() || raw == WifiManager.UNKNOWN_SSID) return null
     return raw.trim('"')
-}
-
-/** Extracts the SSID from a connectivity callback's capabilities (API 29+ path). */
-fun extractSsid(capabilities: NetworkCapabilities): String? {
-    val transportInfo = capabilities.transportInfo
-    return (transportInfo as? WifiInfo).cleanSsid()
 }
 
 /**

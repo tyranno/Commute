@@ -3,100 +3,102 @@ package com.commute.app.wifi
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.SettingsRepository
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Foreground service that watches Wi-Fi connectivity and records an ARRIVE/LEAVE
- * event whenever the device connects to / disconnects from the registered company SSID.
+ * Foreground service that polls Wi-Fi connectivity every [CHECK_INTERVAL_MS] and records
+ * commute events against the registered company SSID: ARRIVE is stamped with the first
+ * poll that observes the company Wi-Fi, LEAVE is stamped with the last poll that still
+ * observed it (not the poll that first notices the disconnect).
  */
 class WifiMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateMutex = Mutex()
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
-    private lateinit var connectivityManager: ConnectivityManager
     private lateinit var settingsRepository: SettingsRepository
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var monitorJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
-        connectivityManager = getSystemService(ConnectivityManager::class.java)
         settingsRepository = SettingsRepository(applicationContext)
         ensureNotificationChannels(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(MONITOR_NOTIFICATION_ID, buildMonitorNotification(this, "출퇴근 감지 중"))
-        if (networkCallback == null) {
-            registerNetworkCallback()
+        if (monitorJob?.isActive != true) {
+            monitorJob = serviceScope.launch {
+                while (isActive) {
+                    checkWifiState()
+                    delay(CHECK_INTERVAL_MS)
+                }
+            }
         }
         return START_STICKY
     }
 
-    private fun registerNetworkCallback() {
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .build()
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                onWifiObserved(extractSsid(capabilities) ?: currentWifiSsid(applicationContext))
-            }
+    private suspend fun checkWifiState() {
+        stateMutex.withLock {
+            val companySsid = settingsRepository.companySsid.first()
+            if (companySsid.isNullOrBlank()) return@withLock
 
-            override fun onLost(network: Network) {
-                onWifiObserved(null)
-            }
-        }
-        networkCallback = callback
-        connectivityManager.registerNetworkCallback(request, callback)
-    }
+            val connectedToCompany = currentWifiSsid(applicationContext) == companySsid
+            val wasAtWork = settingsRepository.isAtWork.first()
+            val now = System.currentTimeMillis()
 
-    private fun onWifiObserved(connectedSsid: String?) {
-        serviceScope.launch {
-            stateMutex.withLock {
-                val companySsid = settingsRepository.companySsid.first()
-                if (companySsid.isNullOrBlank()) return@withLock
-
-                val wasAtWork = settingsRepository.isAtWork.first()
-                val isNowAtCompanyWifi = connectedSsid == companySsid
-
-                if (isNowAtCompanyWifi && !wasAtWork) {
-                    recordEvent(CommuteEventType.ARRIVE, companySsid)
+            if (connectedToCompany) {
+                if (!wasAtWork) {
+                    recordEvent(CommuteEventType.ARRIVE, companySsid, now)
                     settingsRepository.setIsAtWork(true)
-                    showEventNotification(applicationContext, "출근 기록됨", "회사 와이파이($companySsid) 연결 감지")
-                } else if (!isNowAtCompanyWifi && wasAtWork) {
-                    recordEvent(CommuteEventType.LEAVE, companySsid)
-                    settingsRepository.setIsAtWork(false)
-                    showEventNotification(applicationContext, "퇴근 기록됨", "회사 와이파이($companySsid) 연결 해제 감지")
+                    showEventNotification(
+                        applicationContext,
+                        "출근 기록됨",
+                        "회사 와이파이($companySsid) 감지 ${timeFormat.format(Date(now))}"
+                    )
                 }
+                settingsRepository.setLastSeenAt(now)
+            } else if (wasAtWork) {
+                val lastSeen = settingsRepository.lastSeenAt.first() ?: now
+                recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
+                settingsRepository.setIsAtWork(false)
+                showEventNotification(
+                    applicationContext,
+                    "퇴근 기록됨",
+                    "회사 와이파이($companySsid) 마지막 감지 ${timeFormat.format(Date(lastSeen))}"
+                )
             }
         }
     }
 
-    private suspend fun recordEvent(type: CommuteEventType, ssid: String) {
+    private suspend fun recordEvent(type: CommuteEventType, ssid: String, timestamp: Long) {
         CommuteDatabase.getInstance(applicationContext).commuteDao().insert(
-            CommuteEvent(type = type, ssid = ssid, timestamp = System.currentTimeMillis())
+            CommuteEvent(type = type, ssid = ssid, timestamp = timestamp)
         )
     }
 
     override fun onDestroy() {
-        networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        monitorJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -104,6 +106,8 @@ class WifiMonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val CHECK_INTERVAL_MS = 60_000L
+
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, WifiMonitorService::class.java))
         }
