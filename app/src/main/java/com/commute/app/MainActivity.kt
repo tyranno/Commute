@@ -76,10 +76,15 @@ fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = v
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
+    var enableMonitoringAfterPermission by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         hasLocationPermission = result[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (hasLocationPermission && enableMonitoringAfterPermission) {
+            viewModel.setMonitoringEnabled(true)
+        }
+        enableMonitoringAfterPermission = false
     }
 
     var currentSsid by remember { mutableStateOf<String?>(null) }
@@ -136,9 +141,11 @@ fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = v
                         enabled = companySsid != null,
                         onCheckedChange = { enabled ->
                             if (enabled && !hasLocationPermission) {
+                                enableMonitoringAfterPermission = true
                                 requestPermissions()
+                            } else {
+                                viewModel.setMonitoringEnabled(enabled)
                             }
-                            viewModel.setMonitoringEnabled(enabled)
                         }
                     )
                 }

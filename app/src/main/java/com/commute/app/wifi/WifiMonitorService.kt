@@ -1,8 +1,10 @@
 package com.commute.app.wifi
 
+import android.Manifest
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.commute.app.data.CommuteDatabase
@@ -47,6 +49,16 @@ class WifiMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            // A "location"-type foreground service must already hold the permission at the
+            // moment startForeground() is called, or the platform throws a SecurityException
+            // (enforced since Android 14). Bail out instead of crashing if the UI raced ahead
+            // of the permission grant, or the permission was revoked since this was last enabled.
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startForeground(MONITOR_NOTIFICATION_ID, buildMonitorNotification(this, "출퇴근 감지 중"))
         if (monitorJob?.isActive != true) {
             monitorJob = serviceScope.launch {
