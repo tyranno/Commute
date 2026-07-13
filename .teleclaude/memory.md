@@ -1,5 +1,11 @@
 # Commute 프로젝트 메모리
 
+## 2026-07-14: GitHub 저장소 생성 + README 정리
+
+- 로컬에 git 없던 상태였음 → `git init -b main` 후 첫 커밋, `gh repo create Commute --private --source=. --remote=origin --push`로 https://github.com/tyranno/Commute (private) 생성 및 push 완료.
+- 프로젝트 개요(기능/기술스택/구조/빌드법/권한/TODO)를 README.md로 정리해서 함께 커밋. `.gitignore`가 local.properties/build 산출물을 이미 잘 막고 있어서 그대로 커밋에 포함, 별도 조정 불필요했음.
+- `.teleclaude/memory.md`도 그대로 git에 포함시킴(비밀정보 없음, 프로젝트 이력으로 유용).
+
 - 2026-07-14: 새 프로젝트 생성. TRide(Capacitor/Svelte 웹뷰)와 달리 순수 코틀린 + Jetpack Compose 네이티브 안드로이드 앱으로 스캐폴드. 패키지명 `com.commute.app`, 프로젝트 경로 `C:\Project\88.MyProject\Commute`.
 - 빌드 설정은 TRide `android/` 참조: AGP 8.13.0, Gradle wrapper 8.14.3(gradle-wrapper.jar/properties, gradlew, gradlew.bat 그대로 복사), compileSdk/targetSdk 36, minSdk 24. Kotlin 2.1.0 + `org.jetbrains.kotlin.plugin.compose` 사용(Compose Compiler Gradle 플러그인 방식, kotlinCompilerExtensionVersion 방식 아님).
 - JDK/SDK는 TRide의 `build-apk.bat`와 동일한 네이티브 Windows 경로 사용: `JAVA_HOME=C:\Program Files\Android\openjdk\jdk-21.0.8`, `ANDROID_HOME=C:\Program Files (x86)\Android\android-sdk`. (voice-chat 프로젝트와 달리 WSL 경로 아님 — TRide의 `android/local.properties`에 남아있는 WSL 경로(`/home/lab/android-sdk`)는 실사용과 무관한 것으로 보여 Commute는 처음부터 네이티브 Windows 경로로 `local.properties` 작성함.)
