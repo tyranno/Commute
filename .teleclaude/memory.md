@@ -30,3 +30,16 @@
 - `WifiUtils.kt`의 `extractSsid(NetworkCapabilities)`는 NetworkCallback 전용이라 폴링 전환 후 미사용 → 삭제(죽은 코드 방지). `WifiMonitorService`에서 `ConnectivityManager` 관련 import/필드도 전부 제거.
 - 권한/매니페스트는 변경 없음(여전히 `currentWifiSsid()`가 ACCESS_FINE_LOCATION 필요, foregroundServiceType="location" 유지).
 - `JAVA_HOME="C:/Program Files/Android/openjdk/jdk-21.0.8" ./gradlew assembleDebug` 빌드 성공 확인. 커밋 e9725ed, GitHub push 완료. 실기기 라이브 검증은 아직 안 함(다음 세션 TODO).
+
+## 2026-07-14: 랄프루프 5회 구현 점검 (감사→수정→빌드검증→커밋 반복)
+
+teleclaude/aglink-chat에서 쓰던 "랄프루프 N회 감사" 패턴을 Commute에도 적용. 매 라운드마다 실제 결함을 찾아 수정하고 `gradlew assembleDebug`로 빌드 검증 후 커밋, 마지막에 clean build로 전체 회귀 확인 후 push.
+
+- **Round 1 (db80008)**: 세션 시작 시점에 이미 uncommitted 상태로 존재하던 자정 경계 수정(`isSameDay` 기반)을 검토·빌드검증 후 그대로 커밋. `wasAtWork`가 전날부터 이어져 있으면(밤새 연결 유지 또는 감지 중단으로 LEAVE를 못 본 경우) `lastSeenAt` 시각으로 자동 마감 LEAVE를 기록하고, 오늘 기준으로 새로 판정.
+- **Round 2 (98f6254, 가장 중요한 결함)**: **크래시 버그.** targetSdk 36(Android 14+)에서는 `foregroundServiceType="location"`인 서비스가 `startForeground()`를 호출하는 시점에 이미 `ACCESS_FINE_LOCATION`을 보유하고 있어야 하며, 없으면 `SecurityException`. 그런데 `MainActivity`의 스위치 `onCheckedChange`가 `requestPermissions()`(비동기)와 `viewModel.setMonitoringEnabled(true)`(동기)를 같은 클릭에서 동시에 호출해서, 권한 다이얼로그 응답 전에 서비스가 먼저 시작을 시도 → 첫 사용자가 스위치를 켜는 순간 크래시할 수 있는 구조였음. 같은 근본 원인이 `BootReceiver`(재부팅 후 권한이 취소된 상태로 서비스 재시작)에도 있었음.
+  - 수정: `WifiMonitorService.onStartCommand`에서 자체적으로 권한을 체크해서 없으면 `stopSelf()`(양쪽 호출부를 한 곳에서 방어), `MainActivity`는 권한이 실제로 승인된 뒤에만 `setMonitoringEnabled(true)` 호출하도록 콜백 기반으로 변경.
+- **Round 3 (beb3e06)**: UX 결함. 위치 **권한**은 허용해도 기기의 위치 **서비스(GPS 토글)** 가 꺼져 있으면 `WifiManager`가 SSID를 계속 "알 수 없음"으로 반환하는 안드로이드 플랫폼 특성이 있어, 이 상태면 앱이 고장난 것처럼 보임. `LocationManagerCompat.isLocationEnabled()`를 SSID 폴링과 같이 3초마다 확인해서, 권한은 있는데 위치서비스가 꺼져있으면 안내 카드를 띄우도록 추가.
+- **Round 4**: 나머지 리소스/설정 파일(strings.xml, themes.xml, proguard-rules.pro, settings.gradle.kts, .gitignore) 재검토 — 추가 결함 없음으로 확정.
+- **Round 5**: `gradlew clean assembleDebug`로 전체 회귀 빌드 확인(40/40 태스크 실행, BUILD SUCCESSFUL) 후 `git push origin main` 완료(GitHub `tyranno/Commute`, HEAD `beb3e06`).
+- **How to apply**: Round 2 크래시는 실기기 테스트를 아직 안 한 상태에서는 놓치기 쉬운 종류(`targetSdk`가 34+인 `location`/`camera`/`microphone` 타입 foreground service는 항상 "권한 승인 확정 후에만 시작" 패턴을 지킬 것 — 이 프로젝트뿐 아니라 다른 안드로이드 프로젝트에도 적용 가능한 일반 원칙).
+- **미해결/다음 세션**: 실기기 설치 후 실제 회사 와이파이로 ARRIVE/LEAVE/자정마감/권한거부 시나리오 라이브 검증 여전히 안 됨. 저장소 루트에 `.bkit/`(정체불명 에이전트 툴 런타임 상태, git 추적 안 됨)와 `doc/`(관련 없어 보이는 PDF 1개) 미추적 디렉터리가 있는데 이번 작업 범위 밖이라 손대지 않음 — 다음에 정리 필요 여부 사용자에게 확인.
