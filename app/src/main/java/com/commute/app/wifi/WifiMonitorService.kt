@@ -10,6 +10,7 @@ import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.SettingsRepository
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
@@ -64,8 +65,27 @@ class WifiMonitorService : Service() {
             if (companySsid.isNullOrBlank()) return@withLock
 
             val connectedToCompany = currentWifiSsid(applicationContext) == companySsid
-            val wasAtWork = settingsRepository.isAtWork.first()
+            var wasAtWork = settingsRepository.isAtWork.first()
             val now = System.currentTimeMillis()
+
+            // A session must never silently span a calendar day boundary: if we're still
+            // marked "at work" from a previous day (e.g. connected overnight, or monitoring
+            // was paused/killed without ever seeing a disconnect), close it out using the
+            // last tick we actually observed the company SSID, then fall through so a fresh
+            // ARRIVE can be recorded for today if we're still connected.
+            if (wasAtWork) {
+                val lastSeen = settingsRepository.lastSeenAt.first()
+                if (lastSeen != null && !isSameDay(lastSeen, now)) {
+                    recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
+                    settingsRepository.setIsAtWork(false)
+                    showEventNotification(
+                        applicationContext,
+                        "퇴근 기록됨",
+                        "날짜 변경으로 자동 마감 ${timeFormat.format(Date(lastSeen))}"
+                    )
+                    wasAtWork = false
+                }
+            }
 
             if (connectedToCompany) {
                 if (!wasAtWork) {
@@ -95,6 +115,13 @@ class WifiMonitorService : Service() {
         CommuteDatabase.getInstance(applicationContext).commuteDao().insert(
             CommuteEvent(type = type, ssid = ssid, timestamp = timestamp)
         )
+    }
+
+    private fun isSameDay(t1: Long, t2: Long): Boolean {
+        val cal1 = Calendar.getInstance().apply { timeInMillis = t1 }
+        val cal2 = Calendar.getInstance().apply { timeInMillis = t2 }
+        return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
+            cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
     }
 
     override fun onDestroy() {
