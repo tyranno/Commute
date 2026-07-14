@@ -22,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,6 +39,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.ui.theme.CommuteTheme
@@ -55,16 +57,33 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             CommuteTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    CommuteScreen(modifier = Modifier.padding(innerPadding))
-                }
+                CommuteApp()
             }
         }
     }
 }
 
 @Composable
-fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = viewModel()) {
+fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
+    val navController = rememberNavController()
+    NavHost(navController = navController, startDestination = "home") {
+        composable("home") {
+            CommuteScreen(
+                viewModel = viewModel,
+                onOpenSettings = { navController.navigate("settings") }
+            )
+        }
+        composable("settings") {
+            SettingsScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+    }
+}
+
+@Composable
+fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val companySsid by viewModel.companySsid.collectAsState()
     val monitoringEnabled by viewModel.monitoringEnabled.collectAsState()
@@ -111,13 +130,20 @@ fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = v
     }
 
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Commute", style = MaterialTheme.typography.headlineMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Commute", style = MaterialTheme.typography.headlineMedium)
+            Button(onClick = onOpenSettings) { Text("근무 규칙 설정") }
+        }
 
         if (!hasLocationPermission) {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -183,9 +209,21 @@ fun CommuteScreen(modifier: Modifier = Modifier, viewModel: CommuteViewModel = v
 }
 
 private fun formatEvent(event: CommuteEvent): String {
-    val label = if (event.type == CommuteEventType.ARRIVE) "출근" else "퇴근"
-    val time = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(event.timestamp))
-    return "$time  $label  (${event.ssid})"
+    val dateTimeFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+    return when (event.type) {
+        CommuteEventType.ARRIVE -> "${dateTimeFormat.format(Date(event.timestamp))}  출근  (${event.ssid})"
+        CommuteEventType.LEAVE -> "${dateTimeFormat.format(Date(event.timestamp))}  퇴근  (${event.ssid})"
+        CommuteEventType.AWAY -> {
+            val end = event.endTimestamp
+            val range = if (end != null) {
+                "${dateTimeFormat.format(Date(event.timestamp))}~${timeFormat.format(Date(end))} (${(end - event.timestamp) / 60_000}분)"
+            } else {
+                dateTimeFormat.format(Date(event.timestamp))
+            }
+            "$range  이석  (${event.ssid})"
+        }
+    }
 }
 
 @Preview(showBackground = true)

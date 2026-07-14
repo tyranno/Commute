@@ -29,6 +29,19 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val events: StateFlow<List<CommuteEvent>> = dao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val absenceThresholdMinutes: StateFlow<Int> = settingsRepository.absenceThresholdMinutes
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_ABSENCE_THRESHOLD_MINUTES
+        )
+
+    val lunchStartMinute: StateFlow<Int> = settingsRepository.lunchStartMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_LUNCH_START_MINUTE)
+
+    val lunchEndMinute: StateFlow<Int> = settingsRepository.lunchEndMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_LUNCH_END_MINUTE)
+
     fun registerCompanySsid(ssid: String) {
         viewModelScope.launch { settingsRepository.setCompanySsid(ssid) }
     }
@@ -37,5 +50,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepository.setMonitoringEnabled(enabled) }
         val app = getApplication<Application>()
         if (enabled) WifiMonitorService.start(app) else WifiMonitorService.stop(app)
+    }
+
+    fun setAbsenceThresholdMinutes(minutes: Int) {
+        viewModelScope.launch { settingsRepository.setAbsenceThresholdMinutes(minutes) }
+    }
+
+    fun setLunchWindow(startMinute: Int, endMinute: Int) {
+        viewModelScope.launch { settingsRepository.setLunchWindow(startMinute, endMinute) }
     }
 }

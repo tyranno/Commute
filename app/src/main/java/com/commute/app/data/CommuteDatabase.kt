@@ -6,7 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
-@Database(entities = [CommuteEvent::class], version = 1, exportSchema = false)
+@Database(entities = [CommuteEvent::class], version = 2, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class CommuteDatabase : RoomDatabase() {
     abstract fun commuteDao(): CommuteDao
@@ -21,7 +21,11 @@ abstract class CommuteDatabase : RoomDatabase() {
                     context.applicationContext,
                     CommuteDatabase::class.java,
                     "commute.db"
-                ).build().also { INSTANCE = it }
+                )
+                    // Pre-release app with no live-tested data yet; simplest path across schema
+                    // changes is to drop and recreate rather than write a migration.
+                    .fallbackToDestructiveMigration()
+                    .build().also { INSTANCE = it }
             }
     }
 }
