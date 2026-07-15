@@ -41,6 +41,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
@@ -69,10 +70,13 @@ private const val CHART_END_MINUTE = 22 * 60 // 22:00 — matches 근무 인정 
 @Composable
 fun StatusTab(
     todayMinutes: Long,
+    todayMinutesIncludingLunch: Long,
     weeklyMinutes: Long,
     dailyStats: List<DailyWorkStat>,
     events: List<CommuteEvent>,
     companySsid: String?,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
     onDeleteEvent: (CommuteEvent) -> Unit,
@@ -80,6 +84,7 @@ fun StatusTab(
 ) {
     var selectedDay by remember { mutableStateOf<Long?>(null) }
     var weekOffset by remember { mutableStateOf(0) }
+    var showTodayIncludingLunch by remember { mutableStateOf(false) }
     val weekStart = startOfWeek(System.currentTimeMillis()) + weekOffset * WEEK_DAYS * DAY_MS
 
     Column(
@@ -94,7 +99,11 @@ fun StatusTab(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    StatTile("오늘 근무시간", todayMinutes)
+                    StatTile(
+                        label = if (showTodayIncludingLunch) "오늘 근무시간 (점심 포함)" else "오늘 근무시간",
+                        valueMinutes = if (showTodayIncludingLunch) todayMinutesIncludingLunch else todayMinutes,
+                        onClick = { showTodayIncludingLunch = !showTodayIncludingLunch }
+                    )
                     StatTile("이번주 총 근무시간", weeklyMinutes)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -112,6 +121,8 @@ fun StatusTab(
                 WeeklyRangeChart(
                     stats = dailyStats,
                     weekStart = weekStart,
+                    lunchStartMinute = lunchStartMinute,
+                    lunchEndMinute = lunchEndMinute,
                     onDayClick = { selectedDay = it },
                     onWeekChange = { delta -> weekOffset = (weekOffset + delta).coerceAtMost(0) },
                     modifier = Modifier.weight(1f)
@@ -199,8 +210,10 @@ fun RecordsTab(
 }
 
 @Composable
-private fun StatTile(label: String, valueMinutes: Long) {
-    Column {
+private fun StatTile(label: String, valueMinutes: Long, onClick: (() -> Unit)? = null) {
+    Column(
+        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    ) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(formatMinutesAsHours(valueMinutes), style = MaterialTheme.typography.headlineSmall)
     }
@@ -218,6 +231,8 @@ private fun StatTile(label: String, valueMinutes: Long) {
 private fun WeeklyRangeChart(
     stats: List<DailyWorkStat>,
     weekStart: Long,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int,
     onDayClick: (Long) -> Unit,
     onWeekChange: (Int) -> Unit,
     modifier: Modifier = Modifier
@@ -227,6 +242,7 @@ private fun WeeklyRangeChart(
     val days = (0 until WEEK_DAYS).map { weekStart + it * DAY_MS }
     val statByDay = stats.associateBy { it.dayStart }
     val barColor = MaterialTheme.colorScheme.primary
+    val lunchColor = MaterialTheme.colorScheme.tertiary
     val axisColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val density = LocalDensity.current
@@ -304,14 +320,32 @@ private fun WeeklyRangeChart(
                 val stat = statByDay[day]
                 val arriveAt = stat?.firstArriveAt ?: return@forEachIndexed
                 val departAt = if (stat.open) now else (stat.lastLeaveAt ?: return@forEachIndexed)
-                val top = yFor(minuteOfDay(departAt))
-                val bottom = yFor(minuteOfDay(arriveAt)).coerceAtLeast(top + 4f)
+                val arriveMinute = minuteOfDay(arriveAt)
+                val departMinute = minuteOfDay(departAt)
+                val top = yFor(departMinute)
+                val bottom = yFor(arriveMinute).coerceAtLeast(top + 4f)
                 val left = chartLeft + index * slotWidth + (slotWidth - barWidth) / 2f
                 val alpha = if (day == today) 1f else 0.55f
                 val path = Path().apply {
                     addRoundRect(RoundRect(rect = Rect(left, top, left + barWidth, bottom), cornerRadius = corner))
                 }
                 drawPath(path, color = barColor.copy(alpha = alpha))
+
+                // Mark the portion of the bar that falls inside the configured lunch window —
+                // it's excluded from worked time, so it reads visually as a break in the bar.
+                if (lunchStartMinute < lunchEndMinute) {
+                    val overlapStart = maxOf(arriveMinute, lunchStartMinute)
+                    val overlapEnd = minOf(departMinute, lunchEndMinute)
+                    if (overlapEnd > overlapStart) {
+                        val lunchTop = yFor(overlapEnd)
+                        val lunchBottom = yFor(overlapStart)
+                        drawRect(
+                            color = lunchColor.copy(alpha = alpha),
+                            topLeft = Offset(left, lunchTop),
+                            size = Size(barWidth, lunchBottom - lunchTop)
+                        )
+                    }
+                }
             }
         }
         Row(modifier = Modifier.fillMaxWidth()) {

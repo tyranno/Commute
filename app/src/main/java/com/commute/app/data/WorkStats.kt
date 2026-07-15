@@ -24,11 +24,14 @@ fun startOfWeek(timestamp: Long): Long {
 /**
  * Worked minutes for the day starting at [dayStart], plus that day's overall span — the
  * earliest ARRIVE and the latest LEAVE (or null/[open] if the last session hasn't closed
- * yet) — so a UI can plot both "how long" and "when" from one value.
+ * yet) — so a UI can plot both "how long" and "when" from one value. [rawSpanMinutes] is
+ * the same span with the lunch deduction added back, i.e. "how long was I actually present,
+ * lunch included" — for a UI that wants to show that number alongside the worked total.
  */
 data class DailyWorkStat(
     val dayStart: Long,
     val workedMinutes: Long,
+    val rawSpanMinutes: Long = workedMinutes,
     val firstArriveAt: Long? = null,
     val lastLeaveAt: Long? = null,
     val open: Boolean = false
@@ -54,6 +57,7 @@ fun computeDailyWorkStats(
 
     data class DayAccum(
         var minutes: Long = 0,
+        var rawMinutes: Long = 0,
         var firstArrive: Long? = null,
         var lastLeave: Long? = null,
         var open: Boolean = false
@@ -62,10 +66,11 @@ fun computeDailyWorkStats(
 
     fun closeSession(sessionStart: Long, sessionEnd: Long, stillOpen: Boolean) {
         if (sessionEnd <= sessionStart) return
-        val minutes = (sessionEnd - sessionStart) / 60_000 -
-            lunchOverlapMinutes(sessionStart, sessionEnd, lunchStartMinute, lunchEndMinute)
+        val rawMinutes = (sessionEnd - sessionStart) / 60_000
+        val minutes = rawMinutes - lunchOverlapMinutes(sessionStart, sessionEnd, lunchStartMinute, lunchEndMinute)
         val acc = byDay.getOrPut(startOfDay(sessionStart)) { DayAccum() }
         acc.minutes += minutes.coerceAtLeast(0)
+        acc.rawMinutes += rawMinutes.coerceAtLeast(0)
         if (acc.firstArrive == null || sessionStart < acc.firstArrive!!) acc.firstArrive = sessionStart
         acc.open = stillOpen
         if (!stillOpen && (acc.lastLeave == null || sessionEnd > acc.lastLeave!!)) acc.lastLeave = sessionEnd
@@ -86,7 +91,7 @@ fun computeDailyWorkStats(
     pendingArriveAt?.let { closeSession(it, nowMillis, stillOpen = true) }
 
     return byDay.entries.map { (day, acc) ->
-        DailyWorkStat(day, acc.minutes, acc.firstArrive, acc.lastLeave, acc.open)
+        DailyWorkStat(day, acc.minutes, acc.rawMinutes, acc.firstArrive, acc.lastLeave, acc.open)
     }.sortedBy { it.dayStart }
 }
 

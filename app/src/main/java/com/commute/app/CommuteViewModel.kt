@@ -72,6 +72,12 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         .map { stats -> stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }?.workedMinutes ?: 0L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
+    /** Today's worked time with the lunch deduction added back — "how long was I actually
+     * present, lunch included" — for the 오늘 근무시간 tile's tap-to-toggle view. */
+    val todayWorkedMinutesIncludingLunch: StateFlow<Long> = dailyWorkStats
+        .map { stats -> stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }?.rawSpanMinutes ?: 0L }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
     /** Total worked minutes for the actual current calendar week (월~일), regardless of which
      * week the chart is currently paged to. */
     val weeklyWorkedMinutes: StateFlow<Long> = dailyWorkStats

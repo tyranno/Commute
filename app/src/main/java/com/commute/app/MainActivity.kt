@@ -118,6 +118,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val allEvents by viewModel.events.collectAsState()
     val weekEvents by viewModel.weekEvents.collectAsState()
     val todayWorkedMinutes by viewModel.todayWorkedMinutes.collectAsState()
+    val todayWorkedMinutesIncludingLunch by viewModel.todayWorkedMinutesIncludingLunch.collectAsState()
     val weeklyWorkedMinutes by viewModel.weeklyWorkedMinutes.collectAsState()
     val dailyWorkStats by viewModel.dailyWorkStats.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
@@ -256,10 +257,13 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 when (selectedTab) {
                     0 -> StatusTab(
                         todayMinutes = todayWorkedMinutes,
+                        todayMinutesIncludingLunch = todayWorkedMinutesIncludingLunch,
                         weeklyMinutes = weeklyWorkedMinutes,
                         dailyStats = dailyWorkStats,
                         events = allEvents,
                         companySsid = companySsid,
+                        lunchStartMinute = lunchStartMinute,
+                        lunchEndMinute = lunchEndMinute,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,
                         onDeleteEvent = viewModel::deleteEvent,
