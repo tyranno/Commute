@@ -1,13 +1,18 @@
 package com.commute.app
 
 import android.app.Application
+import android.net.Uri
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.commute.app.data.BackupSettings
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.DailyWorkStat
 import com.commute.app.data.SettingsRepository
+import com.commute.app.data.buildBackupJson
 import com.commute.app.data.computeDailyWorkStats
+import com.commute.app.data.parseBackupJson
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
 import com.commute.app.wifi.WifiMonitorService
@@ -117,6 +122,56 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteEvent(event: CommuteEvent) {
         viewModelScope.launch { dao.delete(event) }
+    }
+
+    /** Writes every recorded event plus the durable settings to [uri] as JSON — since it's
+     * saved outside the app's private storage (wherever the user picks via the system file
+     * picker), it survives an uninstall/reinstall that would otherwise wipe the Room DB and
+     * DataStore. */
+    fun exportBackup(uri: Uri) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            try {
+                val allEvents = dao.getAllOnce()
+                val settings = BackupSettings(
+                    companySsid = companySsid.value,
+                    monitoringEnabled = monitoringEnabled.value,
+                    absenceThresholdMinutes = absenceThresholdMinutes.value,
+                    lunchStartMinute = lunchStartMinute.value,
+                    lunchEndMinute = lunchEndMinute.value
+                )
+                val json = buildBackupJson(allEvents, settings, System.currentTimeMillis())
+                app.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                    ?: throw IllegalStateException("파일을 열 수 없습니다")
+                Toast.makeText(app, "백업 완료 (${allEvents.size}건)", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(app, "백업 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** Replaces all current events and durable settings with the contents of a backup file
+     * written by [exportBackup]. Transient service state (isAtWork/lastSeenAt/awaySinceAt)
+     * isn't restored — WifiMonitorService re-derives it from live Wi-Fi presence on its next
+     * poll, so at most it takes one extra poll cycle for the status card to catch up. */
+    fun importBackup(uri: Uri) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            try {
+                val json = app.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                    ?: throw IllegalStateException("파일을 읽을 수 없습니다")
+                val parsed = parseBackupJson(json)
+                dao.deleteAll()
+                dao.insertAll(parsed.events)
+                parsed.settings.companySsid?.let { settingsRepository.setCompanySsid(it) }
+                settingsRepository.setAbsenceThresholdMinutes(parsed.settings.absenceThresholdMinutes)
+                settingsRepository.setLunchWindow(parsed.settings.lunchStartMinute, parsed.settings.lunchEndMinute)
+                setMonitoringEnabled(parsed.settings.monitoringEnabled)
+                Toast.makeText(app, "복원 완료 (${parsed.events.size}건)", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(app, "복원 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun minuteTicker(): Flow<Unit> = flow {

@@ -1,5 +1,7 @@
 package com.commute.app
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,12 +16,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -41,6 +45,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.commute.app.data.formatMinuteOfDayToHHmm
 import com.commute.app.data.parseHHmmToMinuteOfDay
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +59,13 @@ fun SettingsScreen(
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let(viewModel::exportBackup)
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::importBackup)
+    }
 
     Scaffold(
         topBar = {
@@ -110,6 +124,32 @@ fun SettingsScreen(
                         onClick = onOpenPolicyDocument,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("가산 연구소 운영 방안 보기") }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.Save, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("데이터 백업", style = MaterialTheme.typography.titleSmall)
+                    }
+                    Text(
+                        "앱을 삭제했다가 다시 설치해도 출퇴근 기록과 설정이 사라지지 않도록, 파일로 저장하거나 저장해둔 파일에서 불러올 수 있습니다.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                val fileName = "commute_backup_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.json"
+                                exportLauncher.launch(fileName)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("백업 저장") }
+                        OutlinedButton(
+                            onClick = { importLauncher.launch(arrayOf("application/json")) },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("백업 복원") }
+                    }
                 }
             }
         }
