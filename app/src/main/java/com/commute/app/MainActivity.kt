@@ -127,6 +127,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val dailyWorkStats by viewModel.dailyWorkStats.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
+    val missingRecords by viewModel.missingRecords.collectAsState()
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -275,6 +276,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     )
                     else -> RecordsTab(
                         events = weekEvents,
+                        missingRecords = missingRecords,
                         companySsid = companySsid,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,

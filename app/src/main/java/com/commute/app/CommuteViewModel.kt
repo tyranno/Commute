@@ -10,8 +10,10 @@ import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.DailyWorkStat
 import com.commute.app.data.SettingsRepository
+import com.commute.app.data.MissingRecordFlag
 import com.commute.app.data.buildBackupJson
 import com.commute.app.data.computeDailyWorkStats
+import com.commute.app.data.findMissingRecords
 import com.commute.app.data.parseBackupJson
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
@@ -91,6 +93,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
             stats.filter { it.dayStart >= weekStart }.sumOf { it.workedMinutes }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
+    /** ARRIVE/LEAVE events missing their other half (see [findMissingRecords]) across all
+     * recorded history — re-ticked every minute so a still-open ARRIVE stops being treated as
+     * "today's ongoing session" (and gets flagged) right after midnight. */
+    val missingRecords: StateFlow<List<MissingRecordFlag>> = combine(events, minuteTicker()) { allEvents, _ ->
+        findMissingRecords(allEvents, System.currentTimeMillis())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun registerCompanySsid(ssid: String) {
         viewModelScope.launch { settingsRepository.setCompanySsid(ssid) }

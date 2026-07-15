@@ -108,6 +108,50 @@ fun computeDailyWorkStats(
     }.sortedBy { it.dayStart }
 }
 
+/** Which half of an ARRIVE/LEAVE pair is missing for a [MissingRecordFlag]. */
+enum class MissingRecordType { LEAVE_MISSING, ARRIVE_MISSING }
+
+/** [event] has no matching counterpart of the other type next to it — either an ARRIVE with no
+ * LEAVE after it, or a LEAVE with no ARRIVE before it. */
+data class MissingRecordFlag(val event: CommuteEvent, val type: MissingRecordType)
+
+/**
+ * Finds ARRIVE/LEAVE events that aren't properly paired — the same silent cases
+ * [computeDailyWorkStats] has to swallow to keep pairing sessions: two ARRIVEs in a row (the
+ * earlier one never got a LEAVE) and a LEAVE with no ARRIVE before it. Surfacing these lets the
+ * user fill in the missing half instead of that day quietly losing worked time. The very last
+ * pending ARRIVE is only flagged if it's not today's still-open session (someone currently at
+ * work is expected to have no LEAVE yet).
+ */
+fun findMissingRecords(events: List<CommuteEvent>, nowMillis: Long): List<MissingRecordFlag> {
+    val sorted = events.sortedBy { it.timestamp }
+    val flags = mutableListOf<MissingRecordFlag>()
+
+    var pendingArrive: CommuteEvent? = null
+    for (event in sorted) {
+        when (event.type) {
+            CommuteEventType.ARRIVE -> {
+                pendingArrive?.let { flags.add(MissingRecordFlag(it, MissingRecordType.LEAVE_MISSING)) }
+                pendingArrive = event
+            }
+            CommuteEventType.LEAVE -> {
+                if (pendingArrive == null) {
+                    flags.add(MissingRecordFlag(event, MissingRecordType.ARRIVE_MISSING))
+                } else {
+                    pendingArrive = null
+                }
+            }
+            CommuteEventType.AWAY -> Unit
+        }
+    }
+    pendingArrive?.let { arrive ->
+        if (startOfDay(arrive.timestamp) != startOfDay(nowMillis)) {
+            flags.add(MissingRecordFlag(arrive, MissingRecordType.LEAVE_MISSING))
+        }
+    }
+    return flags.sortedByDescending { it.event.timestamp }
+}
+
 /** Minutes of [sessionStart, sessionEnd) that fall inside the configured lunch window
  * (on sessionStart's calendar day), so that time is never counted as worked. */
 private fun lunchOverlapMinutes(

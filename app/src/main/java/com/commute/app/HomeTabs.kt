@@ -20,14 +20,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,10 +53,12 @@ import androidx.compose.ui.unit.dp
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.DailyWorkStat
+import com.commute.app.data.MissingRecordFlag
+import com.commute.app.data.MissingRecordType
+import com.commute.app.data.findMissingRecords
 import com.commute.app.data.formatMinuteOfDayToHHmm
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
-import java.text.ParseException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -148,6 +150,7 @@ fun StatusTab(
 @Composable
 fun RecordsTab(
     events: List<CommuteEvent>,
+    missingRecords: List<MissingRecordFlag>,
     companySsid: String?,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
@@ -156,14 +159,18 @@ fun RecordsTab(
 ) {
     var editingEvent by remember { mutableStateOf<CommuteEvent?>(null) }
     var addingEvent by remember { mutableStateOf(false) }
+    var fixingFlag by remember { mutableStateOf<MissingRecordFlag?>(null) }
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (events.isEmpty()) {
+        if (events.isEmpty() && missingRecords.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("이번주 기록이 없습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             Column(Modifier.fillMaxSize()) {
+                if (missingRecords.isNotEmpty()) {
+                    MissingRecordsBanner(missingRecords, onFix = { fixingFlag = it })
+                }
                 Text(
                     "기록을 눌러 잘못 인식된 유형이나 시각을 고치거나 삭제할 수 있습니다.",
                     style = MaterialTheme.typography.bodySmall,
@@ -206,6 +213,61 @@ fun RecordsTab(
             onDelete = null,
             onDismiss = { addingEvent = false }
         )
+    }
+    fixingFlag?.let { flag ->
+        EditEventDialog(
+            event = missingEventTemplate(flag, companySsid),
+            isNew = true,
+            onSave = { created -> onAddEvent(created); fixingFlag = null },
+            onDelete = null,
+            onDismiss = { fixingFlag = null }
+        )
+    }
+}
+
+/** Lists ARRIVE/LEAVE events missing their other half (see [findMissingRecords]) with a quick
+ * "add the missing one" action per row — these are the same cases [computeDailyWorkStats]
+ * otherwise swallows silently, so surfacing them here is what lets the user actually notice and
+ * fix the gap instead of a day quietly losing worked time. */
+@Composable
+private fun MissingRecordsBanner(flags: List<MissingRecordFlag>, onFix: (MissingRecordFlag) -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                Text(
+                    "기록 누락 ${flags.size}건",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+            flags.forEach { flag ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val message = when (flag.type) {
+                        MissingRecordType.LEAVE_MISSING -> "${formatEventTimeRange(flag.event)} 출근 이후 퇴근 기록 없음"
+                        MissingRecordType.ARRIVE_MISSING -> "${formatEventTimeRange(flag.event)} 퇴근 이전 출근 기록 없음"
+                    }
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { onFix(flag) }) {
+                        Text(if (flag.type == MissingRecordType.LEAVE_MISSING) "퇴근 추가" else "출근 추가")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -508,117 +570,5 @@ private fun formatEventTimeRange(event: CommuteEvent): String {
     }
 }
 
-/** A blank, unsaved record (id=0, so [CommuteDao.insert] assigns a fresh id) prefilled with
- * [day]'s date and the current time-of-day, for the "add a record the service missed" flow. */
-private fun blankEventTemplate(day: Long, ssid: String?): CommuteEvent {
-    val now = System.currentTimeMillis()
-    val timeOfDay = now - startOfDay(now)
-    return CommuteEvent(id = 0L, type = CommuteEventType.ARRIVE, ssid = ssid ?: "", timestamp = day + timeOfDay)
-}
-
-/**
- * Lets the user correct a misdetected record (change its type, its time(s), or delete it) or,
- * when [isNew] is true, fill in one the service missed entirely (e.g. a wifi/permission hiccup,
- * or the phone being off) — same fields, just an insert instead of an update and no delete option.
- */
-@Composable
-private fun EditEventDialog(
-    event: CommuteEvent,
-    isNew: Boolean,
-    onSave: (CommuteEvent) -> Unit,
-    onDelete: (() -> Unit)?,
-    onDismiss: () -> Unit
-) {
-    var type by remember(event) { mutableStateOf(event.type) }
-    var dateText by remember(event) { mutableStateOf(formatDateOnly(event.timestamp)) }
-    var timeText by remember(event) { mutableStateOf(formatTimeOnly(event.timestamp)) }
-    var endTimeText by remember(event) {
-        mutableStateOf(event.endTimestamp?.let { formatTimeOnly(it) } ?: formatTimeOnly(event.timestamp))
-    }
-    var confirmingDelete by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (isNew) "기록 추가" else "기록 수정") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        CommuteEventType.ARRIVE to "출근",
-                        CommuteEventType.LEAVE to "퇴근",
-                        CommuteEventType.AWAY to "자리비움"
-                    ).forEach { (candidateType, label) ->
-                        FilterChip(
-                            selected = type == candidateType,
-                            onClick = { type = candidateType },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-                OutlinedTextField(
-                    value = dateText,
-                    onValueChange = { dateText = it },
-                    label = { Text("날짜 (yyyy-MM-dd)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = timeText,
-                    onValueChange = { timeText = it },
-                    label = { Text(if (type == CommuteEventType.AWAY) "시작 시각 (HH:mm)" else "시각 (HH:mm)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (type == CommuteEventType.AWAY) {
-                    OutlinedTextField(
-                        value = endTimeText,
-                        onValueChange = { endTimeText = it },
-                        label = { Text("종료 시각 (HH:mm)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (confirmingDelete) {
-                    Text(
-                        "삭제하면 되돌릴 수 없습니다. 한 번 더 누르면 삭제됩니다.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val timestamp = parseDateTime(dateText, timeText)
-                val endTimestamp = if (type == CommuteEventType.AWAY) parseDateTime(dateText, endTimeText) else null
-                val valid = timestamp != null &&
-                    (type != CommuteEventType.AWAY || (endTimestamp != null && endTimestamp > timestamp))
-                if (valid) {
-                    onSave(event.copy(type = type, timestamp = timestamp!!, endTimestamp = endTimestamp))
-                }
-            }) { Text(if (isNew) "추가" else "저장") }
-        },
-        dismissButton = {
-            Row {
-                if (onDelete != null) {
-                    TextButton(onClick = {
-                        if (confirmingDelete) onDelete() else confirmingDelete = true
-                    }) { Text(if (confirmingDelete) "정말 삭제" else "삭제", color = MaterialTheme.colorScheme.error) }
-                }
-                TextButton(onClick = onDismiss) { Text("취소") }
-            }
-        }
-    )
-}
-
-private fun formatDateOnly(timestamp: Long): String =
-    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestamp))
-
 private fun formatTimeOnly(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
-
-private fun parseDateTime(dateText: String, timeText: String): Long? {
-    val format = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply { isLenient = false }
-    return try {
-        format.parse("${dateText.trim()} ${timeText.trim()}")?.time
-    } catch (e: ParseException) {
-        null
-    }
-}
