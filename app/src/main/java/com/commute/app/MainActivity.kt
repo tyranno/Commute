@@ -102,8 +102,12 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
         composable("settings") {
             SettingsScreen(
                 viewModel = viewModel,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onOpenPolicyDocument = { navController.navigate("policy") }
             )
+        }
+        composable("policy") {
+            PolicyDocumentScreen(onBack = { navController.popBackStack() })
         }
     }
 }

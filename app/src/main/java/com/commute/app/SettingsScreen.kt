@@ -35,7 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,8 +44,11 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: CommuteViewModel = viewModel(), onBack: () -> Unit = {}) {
-    val context = LocalContext.current
+fun SettingsScreen(
+    viewModel: CommuteViewModel = viewModel(),
+    onBack: () -> Unit = {},
+    onOpenPolicyDocument: () -> Unit = {}
+) {
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
@@ -101,11 +103,11 @@ fun SettingsScreen(viewModel: CommuteViewModel = viewModel(), onBack: () -> Unit
                         Text("근거 문서", style = MaterialTheme.typography.titleSmall)
                     }
                     Text(
-                        "위 규칙들의 근거가 되는 가산 연구소 운영 방안 원본 문서입니다.",
+                        "위 규칙들의 근거가 되는 가산 연구소 운영 방안 문서입니다.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Button(
-                        onClick = { openPolicyDocument(context) },
+                        onClick = onOpenPolicyDocument,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("가산 연구소 운영 방안 보기") }
                 }
