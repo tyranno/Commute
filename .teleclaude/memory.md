@@ -347,3 +347,9 @@ teleclaude/aglink-chat에서 쓰던 "랄프루프 N회 감사" 패턴을 Commute
 - **Round 4**: `gradlew assembleRelease`로 릴리즈 서명 빌드가 최신 코드와도 여전히 문제없이 되는지 확인 + `apksigner verify`로 TRide 인증서(SHA-256 `3c57b1f2...41ea`) 서명이 그대로 유지되는지 재확인.
 - **Round 5**: `gradlew clean assembleDebug` 전체 회귀 빌드(40/40 태스크, BUILD SUCCESSFUL) → 재설치 → 재실행 → logcat에 크래시 없음, `Displayed com.commute.app/.MainActivity` 정상 확인.
 - **결과**: 이번 라운드는 새로 고친 코드가 없음(`git status`가 감사 시작 전과 끝난 후 동일하게 깨끗) — 직전 몇 라운드 동안 이미 여러 번 자체 검증하며 작업해온 덕에 이번엔 순수 확인용 감사로 마무리됨. **How to apply**: 매번 랄프루프를 새로 돌릴 때 직전 랄프루프 커밋 해시를 찾아 `git diff <prev> HEAD --stat`으로 범위를 먼저 파악하면 어디까지 다시 봐야 하는지 명확해짐 — 이번처럼 즉석에서 그 커밋을 찾아쓰는 방식이 효율적이었음.
+
+## 2026-07-15: 랄프루프 통과 후 최신 코드로 서명된 릴리즈 APK 재빌드
+
+- **사용자 지시**: "좋아 그럼 서명된것을 release용 apk를 만들어놔." 랄프루프 재점검이 끝난 시점의 최신 코드(점심 오버레이/토글, 07:00 클램프+차트 시작점, JSON 백업/복원 등 전부 포함)로 배포용 릴리즈 APK를 다시 만들어달라는 요청 — TRide와 같은 서명 키 재사용 설정([[project-gasan-labor-policy]] 최근 항목 중 "TRide와 동일한 인증서로 릴리즈 APK 서명 구성" 참고)은 이미 돼 있어서 새 설정 없이 그냥 재빌드만 하면 됨.
+- **실행**: `gradlew assembleRelease` 재실행 → `app/build/outputs/apk/release/app-release.apk` 생성(52/52 태스크 성공). `apksigner verify --print-certs`로 서명 인증서가 여전히 TRide 것(SHA-256 `3c57b1f2...41ea`)과 일치하는 것 재확인 — `keystore.properties`/`app/tride-release.jks`가 그대로 있어서 별도 설정 없이 바로 서명됨.
+- **결과물 위치**: 별도 폴더로 복사하지 않고 Gradle 표준 출력 경로(`app/build/outputs/apk/release/app-release.apk`)에 그대로 둠 — README의 "릴리즈 서명" 절에 이미 이 경로가 문서화돼 있어서 새 배포 스크립트나 위치 규칙을 만들 필요가 없다고 판단.
