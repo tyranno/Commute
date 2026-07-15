@@ -64,7 +64,7 @@ import java.util.Locale
 
 private const val WEEK_DAYS = 7
 private const val DAY_MS = 24 * 60 * 60 * 1000L
-private const val CHART_START_MINUTE = 6 * 60 // 06:00
+private const val CHART_START_MINUTE = 7 * 60 // 07:00 — matches 근무 인정 시간 lower bound; nothing is ever recognized before this, so no point showing empty space below it
 private const val CHART_END_MINUTE = 22 * 60 // 22:00 — matches 근무 인정 시간 upper bound
 
 @Composable
