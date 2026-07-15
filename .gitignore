@@ -9,3 +9,8 @@
 .cxx
 local.properties
 app/build
+
+# Release signing (shared with TRide's key) — never commit these
+/keystore.properties
+app/*.jks
+app/*.keystore

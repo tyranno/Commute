@@ -64,6 +64,14 @@ app/src/main/assets/
 - `JAVA_HOME=C:\Program Files\Android\openjdk\jdk-21.0.8`
 - `ANDROID_HOME=C:\Program Files (x86)\Android\android-sdk`
 
+### 릴리즈 서명
+
+```
+.\gradlew.bat assembleRelease --no-daemon
+```
+
+TRide 앱과 동일한 인증서로 서명하도록 구성되어 있음(`../TRide/android/app/tride-release.jks`를 `app/tride-release.jks`로 복사해 사용). 서명 정보는 저장소 루트의 `keystore.properties`(gitignore 처리됨, 커밋되지 않음)에서 읽으며, 이 파일과 `.jks`가 없는 환경에서는 서명 없이(unsigned) 빌드됨 — 새 환경에서 릴리즈 빌드를 하려면 두 파일을 직접 준비해야 함.
+
 ## 권한
 
 - `ACCESS_FINE_LOCATION` — 연결된 와이파이 SSID 판독에 필요 (Android 8+)
