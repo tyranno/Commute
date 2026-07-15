@@ -16,16 +16,42 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.Work
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -33,6 +59,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -42,14 +69,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.commute.app.data.CommuteEvent
-import com.commute.app.data.CommuteEventType
+import com.commute.app.data.isWithinMinuteOfDayWindow
 import com.commute.app.ui.theme.CommuteTheme
 import com.commute.app.wifi.currentWifiSsid
+import com.commute.app.wifi.isCompanyWifiNearby
+import com.commute.app.wifi.nearbyWifiSsids
+import com.commute.app.wifi.requestWifiScan
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,13 +108,20 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val companySsid by viewModel.companySsid.collectAsState()
     val monitoringEnabled by viewModel.monitoringEnabled.collectAsState()
     val isAtWork by viewModel.isAtWork.collectAsState()
-    val events by viewModel.events.collectAsState()
+    val allEvents by viewModel.events.collectAsState()
+    val weekEvents by viewModel.weekEvents.collectAsState()
+    val todayWorkedMinutes by viewModel.todayWorkedMinutes.collectAsState()
+    val weeklyWorkedMinutes by viewModel.weeklyWorkedMinutes.collectAsState()
+    val dailyWorkStats by viewModel.dailyWorkStats.collectAsState()
+    val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
+    val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -110,13 +143,19 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     }
 
     var currentSsid by remember { mutableStateOf<String?>(null) }
+    var companyWifiDetectedNow by remember { mutableStateOf(false) }
     var locationServicesEnabled by remember { mutableStateOf(true) }
-    LaunchedEffect(hasLocationPermission) {
+    var isLunchTimeNow by remember { mutableStateOf(false) }
+    LaunchedEffect(hasLocationPermission, companySsid, lunchStartMinute, lunchEndMinute) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         while (true) {
             currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
+            val registeredSsid = companySsid
+            companyWifiDetectedNow = hasLocationPermission && registeredSsid != null &&
+                isCompanyWifiNearby(context, registeredSsid)
             locationServicesEnabled = locationManager == null ||
                 LocationManagerCompat.isLocationEnabled(locationManager)
+            isLunchTimeNow = isWithinMinuteOfDayWindow(System.currentTimeMillis(), lunchStartMinute, lunchEndMinute)
             delay(3_000)
         }
     }
@@ -129,101 +168,302 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
         permissionLauncher.launch(perms.toTypedArray())
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Commute") },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "근무 규칙 설정")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Commute", style = MaterialTheme.typography.headlineMedium)
-            Button(onClick = onOpenSettings) { Text("근무 규칙 설정") }
-        }
-
-        if (!hasLocationPermission) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("와이파이 이름을 읽고 출퇴근을 감지하려면 위치 권한이 필요합니다.")
-                    Button(onClick = { requestPermissions() }) { Text("권한 허용") }
-                }
-            }
-        } else if (!locationServicesEnabled) {
-            // Android requires the device's Location toggle to be on (separately from the
-            // app permission) to read the connected Wi-Fi's real SSID; otherwise WifiManager
-            // silently returns "<unknown ssid>" forever, which looks like a broken app.
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("위치 권한은 허용되어 있지만 기기의 위치 서비스(GPS)가 꺼져 있어 와이파이 이름을 읽을 수 없습니다. 설정에서 위치 서비스를 켜주세요.")
-                }
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("현재 연결된 와이파이: ${currentSsid ?: "없음/알 수 없음"}")
-                Text("등록된 회사 와이파이: ${companySsid ?: "미등록"}")
-                Button(
-                    onClick = { currentSsid?.let(viewModel::registerCompanySsid) },
-                    enabled = currentSsid != null
-                ) { Text("현재 와이파이를 회사 와이파이로 등록") }
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("자동 출퇴근 감지", modifier = Modifier.padding(end = 8.dp))
-                    Switch(
-                        checked = monitoringEnabled,
-                        enabled = companySsid != null,
-                        onCheckedChange = { enabled ->
-                            if (enabled && !hasLocationPermission) {
-                                enableMonitoringAfterPermission = true
-                                requestPermissions()
-                            } else {
-                                viewModel.setMonitoringEnabled(enabled)
-                            }
-                        }
+            // Top section: sized to its content (well under a third of the screen), so the
+            // tabs below get all the leftover space instead of a big empty gap.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (!hasLocationPermission) {
+                    NoticeCard(
+                        icon = Icons.Filled.LocationOn,
+                        title = "위치 권한 필요",
+                        message = "와이파이 이름을 읽고 출퇴근을 감지하려면 위치 권한이 필요합니다."
+                    ) {
+                        Button(onClick = { requestPermissions() }) { Text("권한 허용") }
+                    }
+                } else if (!locationServicesEnabled) {
+                    // Android requires the device's Location toggle to be on (separately from the
+                    // app permission) to read the connected Wi-Fi's real SSID; otherwise WifiManager
+                    // silently returns "<unknown ssid>" forever, which looks like a broken app.
+                    NoticeCard(
+                        icon = Icons.Filled.Warning,
+                        title = "위치 서비스 꺼짐",
+                        message = "위치 권한은 허용되어 있지만 기기의 위치 서비스(GPS)가 꺼져 있어 와이파이 이름을 읽을 수 없습니다. 설정에서 위치 서비스를 켜주세요."
                     )
                 }
-                Text(if (isAtWork) "오늘 상태: 출근 중" else "오늘 상태: 퇴근 / 회사 밖")
-            }
-        }
 
-        Text("최근 기록", style = MaterialTheme.typography.titleMedium)
-        if (events.isEmpty()) {
-            Text("아직 기록이 없습니다.")
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                events.take(50).forEach { event ->
-                    Text(formatEvent(event))
+                var showWifiSearch by remember { mutableStateOf(false) }
+                CompactStatusCard(
+                    isAtWork = isAtWork,
+                    companyWifiDetectedNow = companyWifiDetectedNow,
+                    isLunchTimeNow = isLunchTimeNow,
+                    currentSsid = currentSsid,
+                    companySsid = companySsid,
+                    monitoringEnabled = monitoringEnabled,
+                    switchEnabled = companySsid != null,
+                    onRegister = { currentSsid?.let(viewModel::registerCompanySsid) },
+                    onOpenWifiSearch = { showWifiSearch = true },
+                    onMonitoringChange = { enabled ->
+                        if (enabled && !hasLocationPermission) {
+                            enableMonitoringAfterPermission = true
+                            requestPermissions()
+                        } else {
+                            viewModel.setMonitoringEnabled(enabled)
+                        }
+                    }
+                )
+
+                if (showWifiSearch) {
+                    WifiSearchDialog(
+                        onSelect = { ssid ->
+                            viewModel.registerCompanySsid(ssid)
+                            showWifiSearch = false
+                        },
+                        onDismiss = { showWifiSearch = false }
+                    )
+                }
+            }
+
+            // Bottom section: 현황(stats)/기록(records) tabs, filling all remaining space.
+            var selectedTab by remember { mutableIntStateOf(0) }
+            Column(modifier = Modifier.weight(1f)) {
+                TabRow(selectedTabIndex = selectedTab) {
+                    Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("현황") })
+                    Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("기록") })
+                }
+                when (selectedTab) {
+                    0 -> StatusTab(
+                        todayMinutes = todayWorkedMinutes,
+                        weeklyMinutes = weeklyWorkedMinutes,
+                        dailyStats = dailyWorkStats,
+                        events = allEvents,
+                        companySsid = companySsid,
+                        onAddEvent = viewModel::addEvent,
+                        onUpdateEvent = viewModel::updateEvent,
+                        onDeleteEvent = viewModel::deleteEvent,
+                        modifier = Modifier.weight(1f)
+                    )
+                    else -> RecordsTab(
+                        events = weekEvents,
+                        companySsid = companySsid,
+                        onAddEvent = viewModel::addEvent,
+                        onUpdateEvent = viewModel::updateEvent,
+                        onDeleteEvent = viewModel::deleteEvent,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
     }
 }
 
-private fun formatEvent(event: CommuteEvent): String {
-    val dateTimeFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
-    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-    return when (event.type) {
-        CommuteEventType.ARRIVE -> "${dateTimeFormat.format(Date(event.timestamp))}  출근  (${event.ssid})"
-        CommuteEventType.LEAVE -> "${dateTimeFormat.format(Date(event.timestamp))}  퇴근  (${event.ssid})"
-        CommuteEventType.AWAY -> {
-            val end = event.endTimestamp
-            val range = if (end != null) {
-                "${dateTimeFormat.format(Date(event.timestamp))}~${timeFormat.format(Date(end))} (${(end - event.timestamp) / 60_000}분)"
-            } else {
-                dateTimeFormat.format(Date(event.timestamp))
+/**
+ * Four displayable states, derived from the two real signals the app tracks: [isAtWork] (the
+ * committed session state the background service maintains) and whether the company Wi-Fi is
+ * detected in the live 3-second poll right now. This surfaces the gap between "we can see the
+ * wifi" and "the service has officially logged it" (up to a minute later on its own 1-minute
+ * cadence) as its own state, instead of leaving the user staring at a stale "퇴근" label.
+ */
+private enum class CommuteStatus(val label: String) {
+    LEFT("퇴근"),
+    ARRIVAL_DETECTED("출근 인식됨"),
+    WORKING("근무중"),
+    AWAY("자리비움")
+}
+
+private fun commuteStatus(isAtWork: Boolean, detectedNow: Boolean): CommuteStatus = when {
+    isAtWork && detectedNow -> CommuteStatus.WORKING
+    isAtWork && !detectedNow -> CommuteStatus.AWAY
+    !isAtWork && detectedNow -> CommuteStatus.ARRIVAL_DETECTED
+    else -> CommuteStatus.LEFT
+}
+
+@Composable
+private fun CompactStatusCard(
+    isAtWork: Boolean,
+    companyWifiDetectedNow: Boolean,
+    isLunchTimeNow: Boolean,
+    currentSsid: String?,
+    companySsid: String?,
+    monitoringEnabled: Boolean,
+    switchEnabled: Boolean,
+    onRegister: () -> Unit,
+    onOpenWifiSearch: () -> Unit,
+    onMonitoringChange: (Boolean) -> Unit
+) {
+    val status = commuteStatus(isAtWork, companyWifiDetectedNow)
+    val containerColor = when (status) {
+        CommuteStatus.WORKING -> MaterialTheme.colorScheme.primaryContainer
+        CommuteStatus.ARRIVAL_DETECTED, CommuteStatus.AWAY -> MaterialTheme.colorScheme.tertiaryContainer
+        CommuteStatus.LEFT -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = when (status) {
+        CommuteStatus.WORKING -> MaterialTheme.colorScheme.onPrimaryContainer
+        CommuteStatus.ARRIVAL_DETECTED, CommuteStatus.AWAY -> MaterialTheme.colorScheme.onTertiaryContainer
+        CommuteStatus.LEFT -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val statusIcon = when (status) {
+        CommuteStatus.WORKING -> Icons.Filled.Work
+        CommuteStatus.AWAY -> Icons.AutoMirrored.Filled.DirectionsWalk
+        CommuteStatus.ARRIVAL_DETECTED -> Icons.Filled.Wifi
+        CommuteStatus.LEFT -> Icons.AutoMirrored.Filled.ExitToApp
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = containerColor)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = statusIcon,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier.size(28.dp)
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (isLunchTimeNow) "${status.label} · 점심시간" else status.label,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = contentColor
+                    )
+                    Text(
+                        companySsid?.let { "회사 와이파이: $it" } ?: "회사 와이파이 미등록",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor
+                    )
+                }
+                IconButton(onClick = onOpenWifiSearch) {
+                    Icon(
+                        imageVector = if (currentSsid != null) Icons.Filled.Wifi else Icons.Filled.WifiOff,
+                        contentDescription = "주변 와이파이 검색",
+                        tint = contentColor
+                    )
+                }
+                Switch(checked = monitoringEnabled, enabled = switchEnabled, onCheckedChange = onMonitoringChange)
             }
-            "$range  이석  (${event.ssid})"
+            if (companySsid == null || currentSsid != companySsid) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "현재 와이파이: ${currentSsid ?: "없음/알 수 없음"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onRegister, enabled = currentSsid != null) {
+                        Text("회사 와이파이로 등록")
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun NoticeCard(
+    icon: ImageVector,
+    title: String,
+    message: String,
+    action: (@Composable () -> Unit)? = null
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            Text(message, color = MaterialTheme.colorScheme.onTertiaryContainer)
+            action?.invoke()
+        }
+    }
+}
+
+/**
+ * Lets the user register a company Wi-Fi without needing to actually connect to it first —
+ * requests a fresh scan (best-effort; may be throttled) and lists whatever nearby SSIDs the
+ * device can see, ordered by signal strength, so the user just taps the right one.
+ */
+@Composable
+private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var ssids by remember { mutableStateOf<List<String>>(emptyList()) }
+    var scanning by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        requestWifiScan(context)
+        delay(1_500)
+        ssids = nearbyWifiSsids(context)
+        scanning = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("주변 와이파이 검색") },
+        text = {
+            when {
+                scanning -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    Text("검색 중...")
+                }
+                ssids.isEmpty() -> Text(
+                    "주변에서 와이파이를 찾지 못했습니다.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    items(ssids) { ssid ->
+                        Text(
+                            ssid,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(ssid) }
+                                .padding(vertical = 12.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+    )
 }
 
 @Preview(showBackground = true)

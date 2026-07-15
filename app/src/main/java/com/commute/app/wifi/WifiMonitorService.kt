@@ -11,6 +11,7 @@ import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.SettingsRepository
+import com.commute.app.data.timestampAtMinuteOfDay
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -28,12 +29,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Foreground service that polls Wi-Fi connectivity every [CHECK_INTERVAL_MS] and records
- * commute events against the registered company SSID: ARRIVE is stamped with the first
- * poll that observes the company Wi-Fi, LEAVE is stamped with the last poll that still
- * observed it (not the poll that first notices the disconnect). A disconnect shorter than
+ * Foreground service that polls for the registered company Wi-Fi every [CHECK_INTERVAL_MS] and
+ * records commute events: presence is "SSID shows up in a nearby scan" ([isCompanyWifiNearby]),
+ * not "phone is actually connected to it" — walking into range is enough, matching how a badge
+ * reader works. ARRIVE is stamped with the first poll that observes the company Wi-Fi, LEAVE is
+ * stamped with the last poll that still observed it (not the poll that first notices it's gone).
+ * A disconnect shorter than
  * the configured absence threshold (기본 10분, 가산 연구소 운영 방안 기준) is treated as
- * 이석(temporary absence) rather than 퇴근 and does not end the work session. Disconnects
+ * 자리비움(temporary absence) rather than 퇴근 and does not end the work session. Disconnects
  * that fall inside the configured 점심시간 window get the same treatment regardless of how
  * long they last, plus the normal absence-threshold grace period after the window closes.
  */
@@ -80,7 +83,7 @@ class WifiMonitorService : Service() {
             val companySsid = settingsRepository.companySsid.first()
             if (companySsid.isNullOrBlank()) return@withLock
 
-            val connectedToCompany = currentWifiSsid(applicationContext) == companySsid
+            val companyWifiNearby = isCompanyWifiNearby(applicationContext, companySsid)
             var wasAtWork = settingsRepository.isAtWork.first()
             val now = System.currentTimeMillis()
 
@@ -104,7 +107,7 @@ class WifiMonitorService : Service() {
                 }
             }
 
-            if (connectedToCompany) {
+            if (companyWifiNearby) {
                 if (!wasAtWork) {
                     recordEvent(CommuteEventType.ARRIVE, companySsid, now)
                     settingsRepository.setIsAtWork(true)
@@ -115,15 +118,15 @@ class WifiMonitorService : Service() {
                     )
                 } else {
                     // Reconnected while still "at work": if we had been watching a disconnect,
-                    // it resolved within the absence threshold, so log it as 이석 (not a LEAVE).
+                    // it resolved within the absence threshold, so log it as 자리비움 (not a LEAVE).
                     val awaySince = settingsRepository.awaySinceAt.first()
                     if (awaySince != null) {
                         recordEvent(CommuteEventType.AWAY, companySsid, awaySince, endTimestamp = now)
                         settingsRepository.clearAwaySinceAt()
                         showEventNotification(
                             applicationContext,
-                            "이석 종료",
-                            "복귀 ${timeFormat.format(Date(now))} (이석 ${minutesBetween(awaySince, now)}분)"
+                            "자리비움 종료",
+                            "복귀 ${timeFormat.format(Date(now))} (자리비움 ${minutesBetween(awaySince, now)}분)"
                         )
                     }
                 }
@@ -205,17 +208,6 @@ class WifiMonitorService : Service() {
     private fun minuteOfDay(timestamp: Long): Int {
         val cal = Calendar.getInstance().apply { timeInMillis = timestamp }
         return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
-    }
-
-    private fun timestampAtMinuteOfDay(referenceTimestamp: Long, minuteOfDay: Int): Long {
-        val cal = Calendar.getInstance().apply {
-            timeInMillis = referenceTimestamp
-            set(Calendar.HOUR_OF_DAY, minuteOfDay / 60)
-            set(Calendar.MINUTE, minuteOfDay % 60)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        return cal.timeInMillis
     }
 
     override fun onDestroy() {

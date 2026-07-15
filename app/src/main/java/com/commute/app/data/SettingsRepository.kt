@@ -33,17 +33,17 @@ class SettingsRepository(private val context: Context) {
     /** Non-null while a disconnect is being watched to see if it resolves within the absence threshold. */
     val awaySinceAt: Flow<Long?> = context.dataStore.data.map { it[Keys.AWAY_SINCE_AT] }
 
-    /** 이석 인정 기준(분) — 가산 연구소 운영 방안 기본값 10분. 이 미만의 단절은 퇴근이 아니라 이석으로 처리. */
+    /** 자리비움 인정 기준(분) — 가산 연구소 운영 방안 기본값 10분. 이 미만의 단절은 퇴근이 아니라 자리비움으로 처리. */
     val absenceThresholdMinutes: Flow<Int> = context.dataStore.data.map {
         it[Keys.ABSENCE_THRESHOLD_MINUTES] ?: DEFAULT_ABSENCE_THRESHOLD_MINUTES
     }
 
-    /** 점심시간 시작(자정 기준 분). 이 구간 동안의 단절은 이석 인정 기준과 무관하게 퇴근으로 마감하지 않음. */
+    /** 점심시간 시작(자정 기준 분, 기본 11:20~12:20). 이 구간 동안의 단절은 자리비움 인정 기준과 무관하게 퇴근으로 마감하지 않음. */
     val lunchStartMinute: Flow<Int> = context.dataStore.data.map {
         it[Keys.LUNCH_START_MINUTE] ?: DEFAULT_LUNCH_START_MINUTE
     }
 
-    /** 점심시간 종료(자정 기준 분). 종료 후에도 이석 인정 기준만큼 추가 유예를 둠. */
+    /** 점심시간 종료(자정 기준 분). 종료 후에도 자리비움 인정 기준만큼 추가 유예를 둠. */
     val lunchEndMinute: Flow<Int> = context.dataStore.data.map {
         it[Keys.LUNCH_END_MINUTE] ?: DEFAULT_LUNCH_END_MINUTE
     }
@@ -85,7 +85,7 @@ class SettingsRepository(private val context: Context) {
 
     companion object {
         const val DEFAULT_ABSENCE_THRESHOLD_MINUTES = 10
-        const val DEFAULT_LUNCH_START_MINUTE = 12 * 60 // 12:00
-        const val DEFAULT_LUNCH_END_MINUTE = 13 * 60 // 13:00
+        const val DEFAULT_LUNCH_START_MINUTE = 11 * 60 + 20 // 11:20 — 실제 운영 중인 점심시간 기준
+        const val DEFAULT_LUNCH_END_MINUTE = 12 * 60 + 20 // 12:20
     }
 }
