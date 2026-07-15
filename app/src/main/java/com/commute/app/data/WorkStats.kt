@@ -21,12 +21,18 @@ fun startOfWeek(timestamp: Long): Long {
     return cal.timeInMillis
 }
 
+/** 근무 인정 시간의 시작(자정 기준 분) — 가산 연구소 운영 방안 기준 07:00. 이보다 일찍 출근해도
+ * 근무 시간은 07:00부터 인정. */
+private const val WORK_RECOGNITION_START_MINUTE = 7 * 60
+
 /**
  * Worked minutes for the day starting at [dayStart], plus that day's overall span — the
  * earliest ARRIVE and the latest LEAVE (or null/[open] if the last session hasn't closed
- * yet) — so a UI can plot both "how long" and "when" from one value. [rawSpanMinutes] is
- * the same span with the lunch deduction added back, i.e. "how long was I actually present,
- * lunch included" — for a UI that wants to show that number alongside the worked total.
+ * yet) — so a UI can plot both "how long" and "when" from one value. [firstArriveAt] is
+ * clamped to [WORK_RECOGNITION_START_MINUTE] (07:00) — arriving earlier doesn't move it
+ * back, since work isn't recognized before then. [rawSpanMinutes] is the same span with the
+ * lunch deduction added back, i.e. "how long was I actually present, lunch included" — for
+ * a UI that wants to show that number alongside the worked total.
  */
 data class DailyWorkStat(
     val dayStart: Long,
@@ -39,7 +45,10 @@ data class DailyWorkStat(
 
 /**
  * Pairs ARRIVE→LEAVE events chronologically into sessions and sums each session's
- * duration per calendar day. The configured lunch window is always subtracted from a
+ * duration per calendar day. A session's effective start is clamped forward to 07:00
+ * (근무 인정 시간, [WORK_RECOGNITION_START_MINUTE]) — arriving earlier doesn't count toward
+ * worked time or move the chart's bar earlier, matching the 가산 연구소 운영 방안's 근무 인정
+ * 시간 07:00~22:00 lower bound. The configured lunch window is always subtracted from a
  * session that spans it — regardless of whether the person actually disconnected from
  * wifi during lunch — since it's unpaid break time either way; shorter, non-lunch
  * absences stay counted as work time, matching the 가산 연구소 운영 방안 자리비움 rule.
@@ -66,12 +75,16 @@ fun computeDailyWorkStats(
 
     fun closeSession(sessionStart: Long, sessionEnd: Long, stillOpen: Boolean) {
         if (sessionEnd <= sessionStart) return
-        val rawMinutes = (sessionEnd - sessionStart) / 60_000
-        val minutes = rawMinutes - lunchOverlapMinutes(sessionStart, sessionEnd, lunchStartMinute, lunchEndMinute)
+        val workStart = timestampAtMinuteOfDay(sessionStart, WORK_RECOGNITION_START_MINUTE)
+        val recognizedStart = maxOf(sessionStart, workStart)
+        if (recognizedStart >= sessionEnd) return // entire session falls before 07:00 — nothing recognized
+
+        val rawMinutes = (sessionEnd - recognizedStart) / 60_000
+        val minutes = rawMinutes - lunchOverlapMinutes(recognizedStart, sessionEnd, lunchStartMinute, lunchEndMinute)
         val acc = byDay.getOrPut(startOfDay(sessionStart)) { DayAccum() }
         acc.minutes += minutes.coerceAtLeast(0)
         acc.rawMinutes += rawMinutes.coerceAtLeast(0)
-        if (acc.firstArrive == null || sessionStart < acc.firstArrive!!) acc.firstArrive = sessionStart
+        if (acc.firstArrive == null || recognizedStart < acc.firstArrive!!) acc.firstArrive = recognizedStart
         acc.open = stillOpen
         if (!stillOpen && (acc.lastLeave == null || sessionEnd > acc.lastLeave!!)) acc.lastLeave = sessionEnd
     }
