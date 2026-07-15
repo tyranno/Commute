@@ -2,10 +2,14 @@ package com.commute.app
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -71,6 +75,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.commute.app.data.isWithinMinuteOfDayWindow
 import com.commute.app.ui.theme.CommuteTheme
+import com.commute.app.wifi.WifiMonitorService
 import com.commute.app.wifi.currentWifiSsid
 import com.commute.app.wifi.isCompanyWifiNearby
 import com.commute.app.wifi.nearbyWifiSsids
@@ -148,6 +153,26 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
         enableMonitoringAfterPermission = false
     }
 
+    // Battery-optimization exemption: without this, the OS (Samsung's background app
+    // management in particular) can still kill WifiMonitorService outside of a reboot even
+    // though it's a foreground service — this is what caused a missed arrival overnight (see
+    // project memory). Requesting the exemption once at startup, only if not already granted,
+    // makes that kill far less likely in the first place.
+    val batteryOptLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {}
+    LaunchedEffect(Unit) {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
+            batteryOptLauncher.launch(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:${context.packageName}")
+                )
+            )
+        }
+    }
+
     var currentSsid by remember { mutableStateOf<String?>(null) }
     var companyWifiDetectedNow by remember { mutableStateOf(false) }
     var locationServicesEnabled by remember { mutableStateOf(true) }
@@ -162,7 +187,15 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
             locationServicesEnabled = locationManager == null ||
                 LocationManagerCompat.isLocationEnabled(locationManager)
             isLunchTimeNow = isWithinMinuteOfDayWindow(System.currentTimeMillis(), lunchStartMinute, lunchEndMinute)
-            delay(3_000)
+            // Watchdog: the OS (Samsung's background app management in particular) can kill the
+            // foreground WifiMonitorService outside of a reboot, and nothing else restarts it —
+            // BootReceiver only fires on ACTUAL reboot. Re-issuing start() here is a no-op if the
+            // service is already alive (onStartCommand only spins up a new poll job when none is
+            // active), so this just makes opening the app the moment the service silently died.
+            if (monitoringEnabled && hasLocationPermission) {
+                WifiMonitorService.start(context)
+            }
+            delay(60_000)
         }
     }
 
