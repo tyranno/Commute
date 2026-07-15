@@ -309,7 +309,11 @@ private fun WeeklyRangeChart(
                     strokeWidth = 1.dp.toPx()
                 )
                 val measured = textMeasurer.measure(formatMinuteOfDayToHHmm(tick), style = labelStyle)
-                drawText(measured, topLeft = Offset(0f, (y - measured.size.height / 2f).coerceIn(0f, size.height - measured.size.height)))
+                // size.height can be smaller than the label (e.g. a transient tiny layout pass,
+                // split-screen/multi-window), which would make the upper bound negative and
+                // crash coerceIn — clamp it to never go below the lower bound.
+                val maxLabelY = (size.height - measured.size.height).coerceAtLeast(0f)
+                drawText(measured, topLeft = Offset(0f, (y - measured.size.height / 2f).coerceIn(0f, maxLabelY)))
                 tick += 2 * 60
             }
 
