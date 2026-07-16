@@ -42,6 +42,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val isAtWork: StateFlow<Boolean> = settingsRepository.isAtWork
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** Non-null while [WifiMonitorService] is watching a disconnect to see if it resolves within
+     * the absence threshold — exposed so the status card can tell "just lost the signal" apart
+     * from "actually past the configured 자리비움 grace period" instead of flipping to 자리비움
+     * the instant the signal drops. */
+    val awaySinceAt: StateFlow<Long?> = settingsRepository.awaySinceAt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val events: StateFlow<List<CommuteEvent>> = dao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -58,6 +65,9 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val lunchEndMinute: StateFlow<Int> = settingsRepository.lunchEndMinute
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_LUNCH_END_MINUTE)
 
+    val showWeekend: StateFlow<Boolean> = settingsRepository.showWeekend
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /** Events from Monday of this week onward, for the 기록 tab's scrollable list. */
     val weekEvents: StateFlow<List<CommuteEvent>> = events
         .map { all -> all.filter { it.timestamp >= startOfWeek(System.currentTimeMillis()) } }
@@ -70,9 +80,10 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         events,
         settingsRepository.lunchStartMinute,
         settingsRepository.lunchEndMinute,
+        settingsRepository.absenceThresholdMinutes,
         minuteTicker()
-    ) { allEvents, lunchStart, lunchEnd, _ ->
-        computeDailyWorkStats(allEvents, lunchStart, lunchEnd, System.currentTimeMillis())
+    ) { allEvents, lunchStart, lunchEnd, absenceThreshold, _ ->
+        computeDailyWorkStats(allEvents, lunchStart, lunchEnd, absenceThreshold, System.currentTimeMillis())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val todayWorkedMinutes: StateFlow<Long> = dailyWorkStats
@@ -117,6 +128,10 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     fun setLunchWindow(startMinute: Int, endMinute: Int) {
         viewModelScope.launch { settingsRepository.setLunchWindow(startMinute, endMinute) }
+    }
+
+    fun setShowWeekend(show: Boolean) {
+        viewModelScope.launch { settingsRepository.setShowWeekend(show) }
     }
 
     /** Fills in a record the service missed (e.g. wifi/permission hiccup, phone off). */

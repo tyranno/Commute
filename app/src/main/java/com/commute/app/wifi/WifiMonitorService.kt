@@ -11,7 +11,6 @@ import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.SettingsRepository
-import com.commute.app.data.timestampAtMinuteOfDay
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -32,13 +31,18 @@ import kotlinx.coroutines.sync.withLock
  * Foreground service that polls for the registered company Wi-Fi every [CHECK_INTERVAL_MS] and
  * records commute events: presence is "SSID shows up in a nearby scan" ([isCompanyWifiNearby]),
  * not "phone is actually connected to it" — walking into range is enough, matching how a badge
- * reader works. ARRIVE is stamped with the first poll that observes the company Wi-Fi, LEAVE is
- * stamped with the last poll that still observed it (not the poll that first notices it's gone).
- * A disconnect shorter than
- * the configured absence threshold (기본 10분, 가산 연구소 운영 방안 기준) is treated as
- * 자리비움(temporary absence) rather than 퇴근 and does not end the work session. Disconnects
- * that fall inside the configured 점심시간 window get the same treatment regardless of how
- * long they last, plus the normal absence-threshold grace period after the window closes.
+ * reader works. ARRIVE is stamped with the first poll that observes the company Wi-Fi.
+ *
+ * Exactly one ARRIVE and one LEAVE per work day: any disconnect that reconnects the same day —
+ * no matter how long it lasted, whether that's 2 minutes or 2 hours — always closes out as a
+ * single 자리비움(AWAY) event and the session simply continues; it never splits into a LEAVE
+ * followed by a fresh ARRIVE. The 자리비움 인정 기준(absence threshold) setting no longer decides
+ * whether to end the session here — [computeDailyWorkStats][com.commute.app.data.computeDailyWorkStats]
+ * uses it instead to decide how much of a recorded AWAY span to deduct from worked time (short
+ * ones count as work, long ones don't — the same way lunch time is deducted). The only way a
+ * LEAVE actually gets recorded is the day-boundary safety net below: a disconnect that's still
+ * unresolved when a new calendar day starts is closed out using the last confirmed-connected
+ * timestamp.
  */
 class WifiMonitorService : Service() {
 
@@ -117,8 +121,8 @@ class WifiMonitorService : Service() {
                         "회사 와이파이($companySsid) 감지 ${timeFormat.format(Date(now))}"
                     )
                 } else {
-                    // Reconnected while still "at work": if we had been watching a disconnect,
-                    // it resolved within the absence threshold, so log it as 자리비움 (not a LEAVE).
+                    // Reconnected while still "at work": always closes out as 자리비움, no matter
+                    // how long the disconnect lasted — the session itself never ends here.
                     val awaySince = settingsRepository.awaySinceAt.first()
                     if (awaySince != null) {
                         recordEvent(CommuteEventType.AWAY, companySsid, awaySince, endTimestamp = now)
@@ -132,31 +136,12 @@ class WifiMonitorService : Service() {
                 }
                 settingsRepository.setLastSeenAt(now)
             } else if (wasAtWork) {
-                val awaySince = settingsRepository.awaySinceAt.first()
-                if (awaySince == null) {
-                    // First tick that notices the disconnect: start the absence grace period
-                    // instead of immediately ending the session.
+                // First tick that notices the disconnect: start watching it. It only ever
+                // resolves above (as 자리비움, on reconnect) or via the day-boundary safety net
+                // (as 퇴근, if still unresolved when a new day starts) — never here.
+                if (settingsRepository.awaySinceAt.first() == null) {
                     settingsRepository.setAwaySinceAt(now)
-                } else if (!isWithinLunchWindow(now)) {
-                    val thresholdMs = settingsRepository.absenceThresholdMinutes.first() * 60_000L
-                    // A disconnect that started before/during lunch gets graced until lunch
-                    // officially ends, then the normal grace period on top of that; anything
-                    // else is graced from the moment the disconnect was first noticed.
-                    val graceStart = lunchEndTimestampIfPassed(awaySince, now) ?: awaySince
-                    if (now - graceStart >= thresholdMs) {
-                        val lastSeen = settingsRepository.lastSeenAt.first() ?: awaySince
-                        recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
-                        settingsRepository.setIsAtWork(false)
-                        settingsRepository.clearAwaySinceAt()
-                        showEventNotification(
-                            applicationContext,
-                            "퇴근 기록됨",
-                            "회사 와이파이($companySsid) 마지막 감지 ${timeFormat.format(Date(lastSeen))}"
-                        )
-                    }
-                    // else: still within the grace period, wait for the next poll.
                 }
-                // else: currently inside the configured lunch window — always wait.
             }
         }
     }
@@ -179,35 +164,6 @@ class WifiMonitorService : Service() {
         val cal2 = Calendar.getInstance().apply { timeInMillis = t2 }
         return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
             cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
-    }
-
-    private suspend fun isWithinLunchWindow(timestamp: Long): Boolean {
-        val (start, end) = lunchWindowMinutes() ?: return false
-        val minuteOfDay = minuteOfDay(timestamp)
-        return minuteOfDay in start until end
-    }
-
-    /**
-     * If [awaySince] started before/during a configured lunch window and [now] is past that
-     * window's end, returns the window's end timestamp (so the caller measures the grace
-     * period from lunch's end rather than from when the disconnect first started).
-     */
-    private suspend fun lunchEndTimestampIfPassed(awaySince: Long, now: Long): Long? {
-        val (_, end) = lunchWindowMinutes() ?: return null
-        val lunchEnd = timestampAtMinuteOfDay(awaySince, end)
-        return if (awaySince < lunchEnd && now >= lunchEnd) lunchEnd else null
-    }
-
-    /** Returns (startMinute, endMinute) if a valid lunch window is configured, else null. */
-    private suspend fun lunchWindowMinutes(): Pair<Int, Int>? {
-        val start = settingsRepository.lunchStartMinute.first()
-        val end = settingsRepository.lunchEndMinute.first()
-        return if (start < end) start to end else null
-    }
-
-    private fun minuteOfDay(timestamp: Long): Int {
-        val cal = Calendar.getInstance().apply { timeInMillis = timestamp }
-        return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
     }
 
     override fun onDestroy() {

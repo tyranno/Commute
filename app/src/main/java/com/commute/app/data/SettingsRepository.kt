@@ -23,6 +23,7 @@ class SettingsRepository(private val context: Context) {
         val ABSENCE_THRESHOLD_MINUTES = intPreferencesKey("absence_threshold_minutes")
         val LUNCH_START_MINUTE = intPreferencesKey("lunch_start_minute")
         val LUNCH_END_MINUTE = intPreferencesKey("lunch_end_minute")
+        val SHOW_WEEKEND = booleanPreferencesKey("show_weekend")
     }
 
     val companySsid: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_SSID] }
@@ -47,6 +48,10 @@ class SettingsRepository(private val context: Context) {
     val lunchEndMinute: Flow<Int> = context.dataStore.data.map {
         it[Keys.LUNCH_END_MINUTE] ?: DEFAULT_LUNCH_END_MINUTE
     }
+
+    /** 현황 탭 그래프에 토·일 막대를 표시할지 — 근무일이 보통 월~금이라 기본값은 숨김(false),
+     * 주말에 근무한 경우 등 필요할 때만 켜서 확인하는 용도. */
+    val showWeekend: Flow<Boolean> = context.dataStore.data.map { it[Keys.SHOW_WEEKEND] ?: false }
 
     suspend fun setCompanySsid(ssid: String) {
         context.dataStore.edit { it[Keys.COMPANY_SSID] = ssid }
@@ -81,6 +86,10 @@ class SettingsRepository(private val context: Context) {
             it[Keys.LUNCH_START_MINUTE] = startMinute
             it[Keys.LUNCH_END_MINUTE] = endMinute
         }
+    }
+
+    suspend fun setShowWeekend(show: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_WEEKEND] = show }
     }
 
     companion object {

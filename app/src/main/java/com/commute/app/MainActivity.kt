@@ -124,6 +124,8 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val companySsid by viewModel.companySsid.collectAsState()
     val monitoringEnabled by viewModel.monitoringEnabled.collectAsState()
     val isAtWork by viewModel.isAtWork.collectAsState()
+    val awaySinceAt by viewModel.awaySinceAt.collectAsState()
+    val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val allEvents by viewModel.events.collectAsState()
     val weekEvents by viewModel.weekEvents.collectAsState()
     val todayWorkedMinutes by viewModel.todayWorkedMinutes.collectAsState()
@@ -132,6 +134,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val dailyWorkStats by viewModel.dailyWorkStats.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
+    val showWeekend by viewModel.showWeekend.collectAsState()
     val missingRecords by viewModel.missingRecords.collectAsState()
 
     var hasLocationPermission by remember {
@@ -257,6 +260,8 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 CompactStatusCard(
                     isAtWork = isAtWork,
                     companyWifiDetectedNow = companyWifiDetectedNow,
+                    awaySinceAt = awaySinceAt,
+                    absenceThresholdMinutes = absenceThresholdMinutes,
                     isLunchTimeNow = isLunchTimeNow,
                     currentSsid = currentSsid,
                     companySsid = companySsid,
@@ -302,6 +307,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         companySsid = companySsid,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
+                        showWeekend = showWeekend,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,
                         onDeleteEvent = viewModel::deleteEvent,
@@ -336,17 +342,34 @@ private enum class CommuteStatus(val label: String) {
     AWAY("자리비움")
 }
 
-private fun commuteStatus(isAtWork: Boolean, detectedNow: Boolean): CommuteStatus = when {
-    isAtWork && detectedNow -> CommuteStatus.WORKING
-    isAtWork && !detectedNow -> CommuteStatus.AWAY
-    !isAtWork && detectedNow -> CommuteStatus.ARRIVAL_DETECTED
-    else -> CommuteStatus.LEFT
+/** The signal dropping isn't itself 자리비움 — [WifiMonitorService] only confirms it once
+ * [awaySinceAt] is older than the configured 자리비움 인정 기준, exactly like it does before
+ * actually recording a LEAVE/AWAY event. Showing 자리비움 the instant the wifi is lost (before
+ * that grace period elapses) would flag a status the backend itself doesn't consider settled
+ * yet, so the status card stays on 근무중 until the same threshold has actually passed. */
+private fun commuteStatus(
+    isAtWork: Boolean,
+    detectedNow: Boolean,
+    awaySinceAt: Long?,
+    absenceThresholdMinutes: Int
+): CommuteStatus {
+    val pastAwayThreshold = awaySinceAt != null &&
+        System.currentTimeMillis() - awaySinceAt >= absenceThresholdMinutes * 60_000L
+    return when {
+        isAtWork && detectedNow -> CommuteStatus.WORKING
+        isAtWork && !detectedNow && pastAwayThreshold -> CommuteStatus.AWAY
+        isAtWork && !detectedNow -> CommuteStatus.WORKING
+        !isAtWork && detectedNow -> CommuteStatus.ARRIVAL_DETECTED
+        else -> CommuteStatus.LEFT
+    }
 }
 
 @Composable
 private fun CompactStatusCard(
     isAtWork: Boolean,
     companyWifiDetectedNow: Boolean,
+    awaySinceAt: Long?,
+    absenceThresholdMinutes: Int,
     isLunchTimeNow: Boolean,
     currentSsid: String?,
     companySsid: String?,
@@ -356,7 +379,7 @@ private fun CompactStatusCard(
     onOpenWifiSearch: () -> Unit,
     onMonitoringChange: (Boolean) -> Unit
 ) {
-    val status = commuteStatus(isAtWork, companyWifiDetectedNow)
+    val status = commuteStatus(isAtWork, companyWifiDetectedNow, awaySinceAt, absenceThresholdMinutes)
     val containerColor = when (status) {
         CommuteStatus.WORKING -> MaterialTheme.colorScheme.primaryContainer
         CommuteStatus.ARRIVAL_DETECTED, CommuteStatus.AWAY -> MaterialTheme.colorScheme.tertiaryContainer

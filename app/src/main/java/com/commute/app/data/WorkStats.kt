@@ -44,22 +44,25 @@ data class DailyWorkStat(
 )
 
 /**
- * Pairs ARRIVE→LEAVE events chronologically into sessions and sums each session's
- * duration per calendar day. A session's effective start is clamped forward to 07:00
- * (근무 인정 시간, [WORK_RECOGNITION_START_MINUTE]) — arriving earlier doesn't count toward
- * worked time or move the chart's bar earlier, matching the 가산 연구소 운영 방안's 근무 인정
- * 시간 07:00~22:00 lower bound. The configured lunch window is always subtracted from a
- * session that spans it — regardless of whether the person actually disconnected from
- * wifi during lunch — since it's unpaid break time either way; shorter, non-lunch
- * absences stay counted as work time, matching the 가산 연구소 운영 방안 자리비움 rule.
- * If the last ARRIVE has no matching LEAVE yet (still at work), the session is closed at
- * [nowMillis] so "today" reflects the ongoing session, and that day's [DailyWorkStat.open]
- * is true.
+ * Pairs ARRIVE→LEAVE events chronologically into sessions (exactly one per day — see
+ * [com.commute.app.wifi.WifiMonitorService]) and sums each session's duration. A session's
+ * effective start is clamped forward to 07:00(근무 인정 시간, [WORK_RECOGNITION_START_MINUTE]) —
+ * arriving earlier doesn't count toward worked time or move the chart's bar earlier, matching
+ * the 가산 연구소 운영 방안's 근무 인정 시간 07:00~22:00 lower bound. The configured lunch window
+ * is always subtracted from a session that spans it — regardless of whether the person actually
+ * disconnected from wifi during lunch — since it's unpaid break time either way. Any AWAY span
+ * within the session that's at least [absenceThresholdMinutes] long is *also* subtracted (its
+ * portion outside the lunch window, to avoid double-deducting time already covered by the lunch
+ * subtraction) — shorter AWAY spans stay counted as work time, matching the 가산 연구소 운영
+ * 방안 자리비움 rule. If the last ARRIVE has no matching LEAVE yet (still at work), the session
+ * is closed at [nowMillis] so "today" reflects the ongoing session, and that day's
+ * [DailyWorkStat.open] is true.
  */
 fun computeDailyWorkStats(
     events: List<CommuteEvent>,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
+    absenceThresholdMinutes: Int,
     nowMillis: Long
 ): List<DailyWorkStat> {
     val sorted = events.sortedBy { it.timestamp }
@@ -73,14 +76,20 @@ fun computeDailyWorkStats(
     )
     val byDay = linkedMapOf<Long, DayAccum>()
 
-    fun closeSession(sessionStart: Long, sessionEnd: Long, stillOpen: Boolean) {
+    fun closeSession(sessionStart: Long, sessionEnd: Long, stillOpen: Boolean, awaySpans: List<Pair<Long, Long>>) {
         if (sessionEnd <= sessionStart) return
         val workStart = timestampAtMinuteOfDay(sessionStart, WORK_RECOGNITION_START_MINUTE)
         val recognizedStart = maxOf(sessionStart, workStart)
         if (recognizedStart >= sessionEnd) return // entire session falls before 07:00 — nothing recognized
 
         val rawMinutes = (sessionEnd - recognizedStart) / 60_000
-        val minutes = rawMinutes - lunchOverlapMinutes(recognizedStart, sessionEnd, lunchStartMinute, lunchEndMinute)
+        val lunchMinutes = lunchOverlapMinutes(recognizedStart, sessionEnd, lunchStartMinute, lunchEndMinute)
+        val longAwayMinutes = awaySpans.sumOf { (awayStart, awayEnd) ->
+            val awayMinutes = (awayEnd - awayStart) / 60_000
+            if (awayMinutes < absenceThresholdMinutes) return@sumOf 0L
+            (awayMinutes - lunchOverlapMinutes(awayStart, awayEnd, lunchStartMinute, lunchEndMinute)).coerceAtLeast(0)
+        }
+        val minutes = rawMinutes - lunchMinutes - longAwayMinutes
         val acc = byDay.getOrPut(startOfDay(sessionStart)) { DayAccum() }
         acc.minutes += minutes.coerceAtLeast(0)
         acc.rawMinutes += rawMinutes.coerceAtLeast(0)
@@ -90,18 +99,28 @@ fun computeDailyWorkStats(
     }
 
     var pendingArriveAt: Long? = null
+    var pendingAwaySpans = mutableListOf<Pair<Long, Long>>()
     for (event in sorted) {
         when (event.type) {
-            CommuteEventType.ARRIVE -> pendingArriveAt = event.timestamp
+            CommuteEventType.ARRIVE -> {
+                pendingArriveAt = event.timestamp
+                pendingAwaySpans = mutableListOf()
+            }
             CommuteEventType.LEAVE -> {
                 val arriveAt = pendingArriveAt ?: continue
                 pendingArriveAt = null
-                closeSession(arriveAt, event.timestamp, stillOpen = false)
+                closeSession(arriveAt, event.timestamp, stillOpen = false, awaySpans = pendingAwaySpans)
+                pendingAwaySpans = mutableListOf()
             }
-            CommuteEventType.AWAY -> Unit
+            CommuteEventType.AWAY -> {
+                val awayEnd = event.endTimestamp
+                if (pendingArriveAt != null && awayEnd != null) {
+                    pendingAwaySpans.add(event.timestamp to awayEnd)
+                }
+            }
         }
     }
-    pendingArriveAt?.let { closeSession(it, nowMillis, stillOpen = true) }
+    pendingArriveAt?.let { closeSession(it, nowMillis, stillOpen = true, awaySpans = pendingAwaySpans) }
 
     return byDay.entries.map { (day, acc) ->
         DailyWorkStat(day, acc.minutes, acc.rawMinutes, acc.firstArrive, acc.lastLeave, acc.open)

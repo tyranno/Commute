@@ -79,6 +79,7 @@ fun StatusTab(
     companySsid: String?,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
+    showWeekend: Boolean,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
     onDeleteEvent: (CommuteEvent) -> Unit,
@@ -110,7 +111,7 @@ fun StatusTab(
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        "${weekRangeLabel(weekStart)} 출퇴근 시간 (눌러서 상세 기록, 좌우로 스와이프해 다른 주 보기)",
+                        "이번주 출퇴근 시간(${weekDateRange(weekStart)})",
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.weight(1f)
                     )
@@ -125,6 +126,7 @@ fun StatusTab(
                     weekStart = weekStart,
                     lunchStartMinute = lunchStartMinute,
                     lunchEndMinute = lunchEndMinute,
+                    showWeekend = showWeekend,
                     onDayClick = { selectedDay = it },
                     onWeekChange = { delta -> weekOffset = (weekOffset + delta).coerceAtMost(0) },
                     modifier = Modifier.weight(1f)
@@ -295,13 +297,18 @@ private fun WeeklyRangeChart(
     weekStart: Long,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
+    showWeekend: Boolean,
     onDayClick: (Long) -> Unit,
     onWeekChange: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val now = System.currentTimeMillis()
     val today = startOfDay(now)
-    val days = (0 until WEEK_DAYS).map { weekStart + it * DAY_MS }
+    // weekStart is always a Monday (startOfWeek), so the first 5 slots are 월~금 — 토·일 (the
+    // last two) are left out entirely unless showWeekend is on, rather than just dimmed/skipped,
+    // so the chart doesn't waste two columns on days that are almost never worked.
+    val visibleDayCount = if (showWeekend) WEEK_DAYS else WEEK_DAYS - 2
+    val days = (0 until visibleDayCount).map { weekStart + it * DAY_MS }
     val statByDay = stats.associateBy { it.dayStart }
     val barColor = MaterialTheme.colorScheme.primary
     val lunchColor = MaterialTheme.colorScheme.tertiary
@@ -510,9 +517,9 @@ private fun formatDayHeader(day: Long): String {
     return "${dateFormat.format(Date(day))} (${names[cal.get(Calendar.DAY_OF_WEEK) - 1]})"
 }
 
-/** "이번주" for the current calendar week, otherwise the week's date range (e.g. "7/6~7/12"). */
-private fun weekRangeLabel(weekStart: Long): String {
-    if (weekStart == startOfWeek(System.currentTimeMillis())) return "이번주"
+/** The displayed week's calendar date range, e.g. "7/6~7/12" — shown regardless of whether
+ * it's the current week or one paged back to, so the heading always says which days it is. */
+private fun weekDateRange(weekStart: Long): String {
     val fmt = SimpleDateFormat("M/d", Locale.getDefault())
     val weekEnd = weekStart + (WEEK_DAYS - 1) * DAY_MS
     return "${fmt.format(Date(weekStart))}~${fmt.format(Date(weekEnd))}"

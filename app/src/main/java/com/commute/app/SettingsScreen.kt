@@ -17,15 +17,21 @@ import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Weekend
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -59,6 +65,7 @@ fun SettingsScreen(
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
+    val showWeekend by viewModel.showWeekend.collectAsState()
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let(viewModel::exportBackup)
@@ -89,8 +96,7 @@ fun SettingsScreen(
         ) {
             RuleCard(
                 icon = Icons.AutoMirrored.Filled.DirectionsWalk,
-                title = "자리비움 인정 기준(분)",
-                description = "이 시간 미만으로 회사 와이파이가 끊기면 퇴근이 아니라 자리비움으로 기록합니다. (기본값: 가산 연구소 운영 방안 기준 10분)"
+                title = "자리비움 인정 기준(분)"
             ) {
                 AbsenceThresholdEditor(
                     minutes = absenceThresholdMinutes,
@@ -100,8 +106,7 @@ fun SettingsScreen(
 
             RuleCard(
                 icon = Icons.Filled.Restaurant,
-                title = "점심시간",
-                description = "이 구간의 단절은 자리비움 인정 기준과 무관하게 퇴근으로 마감하지 않습니다. (기본값: 현재 운영 중인 점심시간 11:20~12:20)"
+                title = "점심시간"
             ) {
                 LunchWindowEditor(
                     startMinute = lunchStartMinute,
@@ -110,16 +115,26 @@ fun SettingsScreen(
                 )
             }
 
+            RuleCard(
+                icon = Icons.Filled.Weekend,
+                title = "주말(토·일) 표시"
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(if (showWeekend) "표시함" else "숨김")
+                    Switch(checked = showWeekend, onCheckedChange = viewModel::setShowWeekend)
+                }
+            }
+
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Text("근거 문서", style = MaterialTheme.typography.titleSmall)
                     }
-                    Text(
-                        "위 규칙들의 근거가 되는 가산 연구소 운영 방안 문서입니다.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
                     Button(
                         onClick = onOpenPolicyDocument,
                         modifier = Modifier.fillMaxWidth()
@@ -133,10 +148,6 @@ fun SettingsScreen(
                         Icon(Icons.Filled.Save, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Text("데이터 백업", style = MaterialTheme.typography.titleSmall)
                     }
-                    Text(
-                        "앱을 삭제했다가 다시 설치해도 출퇴근 기록과 설정이 사라지지 않도록, 파일로 저장하거나 저장해둔 파일에서 불러올 수 있습니다.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
@@ -160,7 +171,6 @@ fun SettingsScreen(
 private fun RuleCard(
     icon: ImageVector,
     title: String,
-    description: String,
     editor: @Composable () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -169,7 +179,6 @@ private fun RuleCard(
                 Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Text(title, style = MaterialTheme.typography.titleSmall)
             }
-            Text(description, style = MaterialTheme.typography.bodyMedium)
             editor()
         }
     }
@@ -178,32 +187,55 @@ private fun RuleCard(
 /** How long to wait after the user stops typing before auto-saving. */
 private const val AUTO_SAVE_DEBOUNCE_MS = 800L
 
+/** 10-minute steps to an hour, 20-minute steps to 2 hours, 30-minute steps to a 3-hour cap —
+ * finer control isn't useful at the low end, and nobody needs to configure past 3 hours. */
+private val ABSENCE_THRESHOLD_OPTIONS_MINUTES =
+    (10..60 step 10) + (80..120 step 20) + (150..180 step 30)
+
+private fun formatThresholdLabel(minutes: Int): String {
+    val hours = minutes / 60
+    val mins = minutes % 60
+    return when {
+        hours == 0 -> "${minutes}분"
+        mins == 0 -> "${hours}시간"
+        else -> "${hours}시간 ${mins}분"
+    }
+}
+
+/** A fixed set of choices tapped and saved immediately (no free-text, no debounce) — picking one
+ * is always a complete, valid value, so there's no "still mid-edit" state that a debounced
+ * auto-save could flush too early or lose if the app is closed before the delay elapses. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
-    var text by remember(minutes) { mutableStateOf(minutes.toString()) }
-
-    fun trySave() {
-        text.toIntOrNull()?.takeIf { it > 0 }?.let(onSave)
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.padding(top = 4.dp)
+    ) {
+        OutlinedTextField(
+            value = formatThresholdLabel(minutes),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("자리비움 인정 기준") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ABSENCE_THRESHOLD_OPTIONS_MINUTES.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(formatThresholdLabel(option)) },
+                    onClick = {
+                        onSave(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
     }
-
-    LaunchedEffect(text) {
-        delay(AUTO_SAVE_DEBOUNCE_MS)
-        trySave()
-    }
-    // Flush a pending valid edit immediately if the user leaves before the debounce fires.
-    DisposableEffect(Unit) {
-        onDispose { trySave() }
-    }
-
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = it },
-        label = { Text("분") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp)
-    )
 }
 
 @Composable
