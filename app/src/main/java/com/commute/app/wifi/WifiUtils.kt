@@ -31,11 +31,18 @@ fun currentWifiSsid(context: Context): String? {
  * Reads the OS's cached scan results (populated by the system's own periodic scanning) rather
  * than calling [WifiManager.startScan], which is heavily throttled on Android 9+ and would add
  * little freshness on a 1-minute poll interval anyway. Requires ACCESS_FINE_LOCATION.
+ *
+ * Also counts an actual live connection to [companySsid] as "nearby" even if the scan cache
+ * doesn't (yet) list it — the scan cache can miss a poll cycle while genuinely connected (stale
+ * cache, a missed background scan tick, brief AP interference), which showed up in practice as a
+ * spurious ~1-minute 자리비움 while the phone never left the office. A real connection is always
+ * at least as strong a presence signal as a scan hit, so this only ever adds true positives.
  */
 @Suppress("DEPRECATION")
 fun isCompanyWifiNearby(context: Context, companySsid: String): Boolean {
     val wifiManager = context.applicationContext
         .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return false
+    if (wifiManager.connectionInfo.cleanSsid() == companySsid) return true
     return wifiManager.scanResults.any { result -> result.SSID?.trim('"') == companySsid }
 }
 
