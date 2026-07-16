@@ -180,7 +180,7 @@ fun RecordsTab(
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     items(events.sortedByDescending { it.timestamp }, key = { it.id }) { event ->
                         EventRow(event, onClick = { editingEvent = event })
@@ -541,13 +541,13 @@ private fun EventRow(event: CommuteEvent, onClick: () -> Unit = {}) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = 12.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(icon, contentDescription = label, tint = tint)
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(label, style = MaterialTheme.typography.titleSmall)
+                Text(label, style = MaterialTheme.typography.bodyMedium)
                 Text(
                     event.ssid,
                     style = MaterialTheme.typography.bodySmall,
