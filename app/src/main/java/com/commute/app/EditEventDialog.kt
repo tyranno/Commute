@@ -184,7 +184,13 @@ fun EditEventDialog(
 
 /** A tappable field styled like a text field but opening a picker instead of a keyboard. */
 @Composable
-private fun PickerField(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+fun PickerField(
+    label: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     OutlinedTextField(
         value = value,
         onValueChange = {},
@@ -192,7 +198,7 @@ private fun PickerField(label: String, value: String, icon: androidx.compose.ui.
         enabled = false,
         label = { Text(label) },
         trailingIcon = { Icon(icon, contentDescription = null) },
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
@@ -207,7 +213,7 @@ private fun PickerField(label: String, value: String, icon: androidx.compose.ui.
 /** Material3 doesn't ship a TimePicker dialog wrapper (unlike DatePickerDialog) — this follows
  * the pattern from the official docs: a plain [Dialog] hosting the [TimePicker] plus buttons. */
 @Composable
-private fun TimePickerDialog(
+fun TimePickerDialog(
     title: String,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,

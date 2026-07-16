@@ -9,11 +9,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Save
@@ -33,10 +33,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,12 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.commute.app.data.formatMinuteOfDayToHHmm
-import com.commute.app.data.parseHHmmToMinuteOfDay
-import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -184,9 +181,6 @@ private fun RuleCard(
     }
 }
 
-/** How long to wait after the user stops typing before auto-saving. */
-private const val AUTO_SAVE_DEBOUNCE_MS = 800L
-
 /** 10-minute steps to an hour, 20-minute steps to 2 hours, 30-minute steps to a 3-hour cap —
  * finer control isn't useful at the low end, and nobody needs to configure past 3 hours. */
 private val ABSENCE_THRESHOLD_OPTIONS_MINUTES =
@@ -238,39 +232,53 @@ private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
     }
 }
 
+/** Picked (not typed) so every value is a complete, valid time — same reasoning as
+ * [AbsenceThresholdEditor]: no free-text intermediate state that could be lost. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LunchWindowEditor(startMinute: Int, endMinute: Int, onSave: (Int, Int) -> Unit) {
-    var startText by remember(startMinute) { mutableStateOf(formatMinuteOfDayToHHmm(startMinute)) }
-    var endText by remember(endMinute) { mutableStateOf(formatMinuteOfDayToHHmm(endMinute)) }
-
-    fun trySave() {
-        val start = parseHHmmToMinuteOfDay(startText)
-        val end = parseHHmmToMinuteOfDay(endText)
-        if (start != null && end != null && start < end) {
-            onSave(start, end)
-        }
-    }
-
-    LaunchedEffect(startText, endText) {
-        delay(AUTO_SAVE_DEBOUNCE_MS)
-        trySave()
-    }
-    DisposableEffect(Unit) {
-        onDispose { trySave() }
-    }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = startText,
-            onValueChange = { startText = it },
-            label = { Text("시작") },
+        PickerField(
+            label = "시작",
+            value = formatMinuteOfDayToHHmm(startMinute),
+            icon = Icons.Filled.AccessTime,
+            onClick = { showStartPicker = true },
             modifier = Modifier.weight(1f)
         )
-        OutlinedTextField(
-            value = endText,
-            onValueChange = { endText = it },
-            label = { Text("종료") },
+        PickerField(
+            label = "종료",
+            value = formatMinuteOfDayToHHmm(endMinute),
+            icon = Icons.Filled.AccessTime,
+            onClick = { showEndPicker = true },
             modifier = Modifier.weight(1f)
         )
+    }
+
+    if (showStartPicker) {
+        val state = rememberTimePickerState(initialHour = startMinute / 60, initialMinute = startMinute % 60, is24Hour = true)
+        TimePickerDialog(
+            title = "시작 시각 선택",
+            onDismiss = { showStartPicker = false },
+            onConfirm = {
+                val newStart = state.hour * 60 + state.minute
+                if (newStart < endMinute) onSave(newStart, endMinute)
+                showStartPicker = false
+            }
+        ) { TimePicker(state = state) }
+    }
+    if (showEndPicker) {
+        val state = rememberTimePickerState(initialHour = endMinute / 60, initialMinute = endMinute % 60, is24Hour = true)
+        TimePickerDialog(
+            title = "종료 시각 선택",
+            onDismiss = { showEndPicker = false },
+            onConfirm = {
+                val newEnd = state.hour * 60 + state.minute
+                if (startMinute < newEnd) onSave(startMinute, newEnd)
+                showEndPicker = false
+            }
+        ) { TimePicker(state = state) }
     }
 }
