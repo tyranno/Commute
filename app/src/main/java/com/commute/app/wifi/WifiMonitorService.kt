@@ -33,16 +33,17 @@ import kotlinx.coroutines.sync.withLock
  * not "phone is actually connected to it" — walking into range is enough, matching how a badge
  * reader works. ARRIVE is stamped with the first poll that observes the company Wi-Fi.
  *
- * Exactly one ARRIVE and one LEAVE per work day: any disconnect that reconnects the same day —
- * no matter how long it lasted, whether that's 2 minutes or 2 hours — always closes out as a
- * single 자리비움(AWAY) event and the session simply continues; it never splits into a LEAVE
- * followed by a fresh ARRIVE. The 자리비움 인정 기준(absence threshold) setting no longer decides
- * whether to end the session here — [computeDailyWorkStats][com.commute.app.data.computeDailyWorkStats]
- * uses it instead to decide how much of a recorded AWAY span to deduct from worked time (short
- * ones count as work, long ones don't — the same way lunch time is deducted). The only way a
- * LEAVE actually gets recorded is the day-boundary safety net below: a disconnect that's still
- * unresolved when a new calendar day starts is closed out using the last confirmed-connected
- * timestamp.
+ * Exactly one ARRIVE and one LEAVE per work day: a disconnect that reconnects the same day never
+ * splits the session into a LEAVE followed by a fresh ARRIVE — it either leaves no trace at all
+ * (see below) or closes out as a single 자리비움(AWAY) event, and the session simply continues.
+ * 자리비움 *is*, by definition, an absence that reached the configured 자리비움 인정 기준
+ * (absence threshold): a disconnect resolved in less than that time is treated as pure noise and
+ * recorded as nothing — not even a short AWAY entry — while one that reaches or exceeds it gets
+ * recorded with its full real duration. [computeDailyWorkStats][com.commute.app.data.computeDailyWorkStats]
+ * then deducts that recorded span from worked time (the same way lunch time is deducted). The
+ * only way a LEAVE actually gets recorded is the day-boundary safety net below: a disconnect
+ * that's still unresolved when a new calendar day starts is closed out using the last
+ * confirmed-connected timestamp.
  */
 class WifiMonitorService : Service() {
 
@@ -102,6 +103,7 @@ class WifiMonitorService : Service() {
                     recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
+                    settingsRepository.clearProvisionalAwaySinceAt()
                     showEventNotification(
                         applicationContext,
                         "퇴근 기록됨",
@@ -112,6 +114,10 @@ class WifiMonitorService : Service() {
             }
 
             if (companyWifiNearby) {
+                // A provisional (single-tick, not yet promoted) miss never became a real
+                // disconnect, so there's nothing to record for it — just clear it, whether this
+                // poll is a fresh ARRIVE or a reconnect while already at work.
+                settingsRepository.clearProvisionalAwaySinceAt()
                 if (!wasAtWork) {
                     recordEvent(CommuteEventType.ARRIVE, companySsid, now)
                     settingsRepository.setIsAtWork(true)
@@ -121,26 +127,43 @@ class WifiMonitorService : Service() {
                         "회사 와이파이($companySsid) 감지 ${timeFormat.format(Date(now))}"
                     )
                 } else {
-                    // Reconnected while still "at work": always closes out as 자리비움, no matter
-                    // how long the disconnect lasted — the session itself never ends here.
+                    // Reconnected while still "at work": the session itself never ends here, but
+                    // it's only actually recorded as 자리비움 if the disconnect reached the
+                    // configured absence threshold — 자리비움 *is*, by definition, "unseen for at
+                    // least that long." Anything shorter is just noise and leaves no record at
+                    // all, exactly as if it never happened.
                     val awaySince = settingsRepository.awaySinceAt.first()
                     if (awaySince != null) {
-                        recordEvent(CommuteEventType.AWAY, companySsid, awaySince, endTimestamp = now)
+                        val thresholdMs = settingsRepository.absenceThresholdMinutes.first() * 60_000L
+                        if (now - awaySince >= thresholdMs) {
+                            recordEvent(CommuteEventType.AWAY, companySsid, awaySince, endTimestamp = now)
+                            showEventNotification(
+                                applicationContext,
+                                "자리비움 종료",
+                                "복귀 ${timeFormat.format(Date(now))} (자리비움 ${minutesBetween(awaySince, now)}분)"
+                            )
+                        }
                         settingsRepository.clearAwaySinceAt()
-                        showEventNotification(
-                            applicationContext,
-                            "자리비움 종료",
-                            "복귀 ${timeFormat.format(Date(now))} (자리비움 ${minutesBetween(awaySince, now)}분)"
-                        )
                     }
                 }
                 settingsRepository.setLastSeenAt(now)
             } else if (wasAtWork) {
-                // First tick that notices the disconnect: start watching it. It only ever
-                // resolves above (as 자리비움, on reconnect) or via the day-boundary safety net
-                // (as 퇴근, if still unresolved when a new day starts) — never here.
+                // A single missed poll doesn't start the away timer by itself — it's just as
+                // likely a brief reassociation/DHCP renewal blip as a real disconnect. Only a
+                // second consecutive miss promotes it to a real disconnect (backdated to the
+                // first miss, so the recorded duration is still accurate); one isolated miss
+                // that resolves on the very next poll is treated as pure noise and never
+                // recorded at all — which is what actually eliminated the spurious ~1-minute
+                // 자리비움 entries an earlier, narrower fix (checking a live connection in
+                // addition to the scan cache) didn't fully cover.
                 if (settingsRepository.awaySinceAt.first() == null) {
-                    settingsRepository.setAwaySinceAt(now)
+                    val provisionalSince = settingsRepository.provisionalAwaySinceAt.first()
+                    if (provisionalSince == null) {
+                        settingsRepository.setProvisionalAwaySinceAt(now)
+                    } else {
+                        settingsRepository.setAwaySinceAt(provisionalSince)
+                        settingsRepository.clearProvisionalAwaySinceAt()
+                    }
                 }
             }
         }

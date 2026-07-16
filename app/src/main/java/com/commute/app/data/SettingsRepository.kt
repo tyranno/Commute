@@ -20,6 +20,7 @@ class SettingsRepository(private val context: Context) {
         val IS_AT_WORK = booleanPreferencesKey("is_at_work")
         val LAST_SEEN_AT = longPreferencesKey("last_seen_at")
         val AWAY_SINCE_AT = longPreferencesKey("away_since_at")
+        val PROVISIONAL_AWAY_SINCE_AT = longPreferencesKey("provisional_away_since_at")
         val ABSENCE_THRESHOLD_MINUTES = intPreferencesKey("absence_threshold_minutes")
         val LUNCH_START_MINUTE = intPreferencesKey("lunch_start_minute")
         val LUNCH_END_MINUTE = intPreferencesKey("lunch_end_minute")
@@ -33,6 +34,11 @@ class SettingsRepository(private val context: Context) {
 
     /** Non-null while a disconnect is being watched to see if it resolves within the absence threshold. */
     val awaySinceAt: Flow<Long?> = context.dataStore.data.map { it[Keys.AWAY_SINCE_AT] }
+
+    /** Non-null while a *single* missed poll is waiting for a second consecutive miss before
+     * it's promoted to a real [awaySinceAt] — filters out one-tick blips (brief reassociation,
+     * DHCP renewal) that would otherwise show up as spurious ~1-minute 자리비움 records. */
+    val provisionalAwaySinceAt: Flow<Long?> = context.dataStore.data.map { it[Keys.PROVISIONAL_AWAY_SINCE_AT] }
 
     /** 자리비움 인정 기준(분) — 가산 연구소 운영 방안 기본값 10분. 이 미만의 단절은 퇴근이 아니라 자리비움으로 처리. */
     val absenceThresholdMinutes: Flow<Int> = context.dataStore.data.map {
@@ -75,6 +81,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun clearAwaySinceAt() {
         context.dataStore.edit { it.remove(Keys.AWAY_SINCE_AT) }
+    }
+
+    suspend fun setProvisionalAwaySinceAt(timestamp: Long) {
+        context.dataStore.edit { it[Keys.PROVISIONAL_AWAY_SINCE_AT] = timestamp }
+    }
+
+    suspend fun clearProvisionalAwaySinceAt() {
+        context.dataStore.edit { it.remove(Keys.PROVISIONAL_AWAY_SINCE_AT) }
     }
 
     suspend fun setAbsenceThresholdMinutes(minutes: Int) {
