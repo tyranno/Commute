@@ -1,11 +1,14 @@
 package com.commute.app.wifi
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
@@ -15,6 +18,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,11 +75,40 @@ class WifiMonitorService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(MONITOR_NOTIFICATION_ID, buildMonitorNotification(this, "출퇴근 감지 중"))
+        // Holding ACCESS_FINE_LOCATION is necessary but NOT sufficient for a location-type FGS:
+        // Android 14+ also requires the app to be in a while-in-use eligible state, which can't
+        // be checked up front. Starting from the background (BootReceiver, or the in-app watchdog
+        // once the activity has stopped) therefore throws here — and since this runs on the main
+        // thread inside onStartCommand with START_STICKY, an uncaught throw crashed the process
+        // and the system immediately restarted it into the same crash. Bail out quietly instead;
+        // the watchdog retries the next time the app is genuinely in the foreground.
+        try {
+            startForeground(MONITOR_NOTIFICATION_ID, buildMonitorNotification(this, "출퇴근 감지 중"))
+        } catch (e: Exception) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // Re-armed on every delivery so the chain can't die out.
+        scheduleNextPollAlarm()
+        if (intent?.action == ACTION_POLL) {
+            runOneShotPoll()
+        }
+
         if (monitorJob?.isActive != true) {
             monitorJob = serviceScope.launch {
                 while (isActive) {
-                    checkWifiState()
+                    // One bad tick must not take down monitoring for the rest of the day: a
+                    // transient DataStore IOException (disk full, corrupt prefs) or a Room
+                    // SQLiteException would otherwise reach the default handler and kill the
+                    // process, since a SupervisorJob only stops siblings from cancelling.
+                    try {
+                        checkWifiState()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Skip this tick; the next one re-reads state from scratch.
+                    }
                     delay(CHECK_INTERVAL_MS)
                 }
             }
@@ -192,6 +225,55 @@ class WifiMonitorService : Service() {
         }
     }
 
+    /**
+     * The 60s coroutine loop only ticks while the CPU is awake. A foreground service keeps the
+     * *process* alive but does nothing to stop the device suspending, so once the phone dozes
+     * (screen off and stationary — i.e. every night and weekend) `delay()` simply stops firing
+     * and detection goes silent until something else wakes the device. That is the most likely
+     * explanation for arrivals that were recorded late, or not at all, after an idle stretch.
+     *
+     * `setAndAllowWhileIdle` is delivered even in Doze (throttled to roughly every 9-15 minutes,
+     * which is well inside the absence threshold) and grants a brief allowlist window on delivery,
+     * so targeting the foreground service directly is permitted here even though a background FGS
+     * start normally isn't.
+     */
+    private fun scheduleNextPollAlarm() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        try {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + CHECK_INTERVAL_MS,
+                pollPendingIntent(this)
+            )
+        } catch (e: Exception) {
+            // Alarm quota exhausted or similar — the awake-path loop still covers the common case.
+        }
+    }
+
+    /**
+     * One extra check for an alarm delivery, under a short wakelock: the alarm only guarantees the
+     * device is awake at the moment of delivery, and without holding it the phone can suspend
+     * again mid-check, before the Wi-Fi read and its DB write complete.
+     */
+    private fun runOneShotPoll() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)?.apply {
+            setReferenceCounted(false)
+            acquire(WAKELOCK_TIMEOUT_MS)
+        }
+        serviceScope.launch {
+            try {
+                checkWifiState()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Same rationale as the loop: one bad tick must not kill monitoring.
+            } finally {
+                if (wakeLock?.isHeld == true) wakeLock.release()
+            }
+        }
+    }
+
     private suspend fun recordEvent(
         type: CommuteEventType,
         ssid: String,
@@ -213,6 +295,9 @@ class WifiMonitorService : Service() {
     }
 
     override fun onDestroy() {
+        // Cancel the alarm too, or the chain keeps waking the device (and restarting this
+        // service) after the user has deliberately turned monitoring off.
+        (getSystemService(Context.ALARM_SERVICE) as? AlarmManager)?.cancel(pollPendingIntent(this))
         monitorJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
@@ -222,9 +307,31 @@ class WifiMonitorService : Service() {
 
     companion object {
         private const val CHECK_INTERVAL_MS = 60_000L
+        private const val ACTION_POLL = "com.commute.app.action.POLL"
+        private const val WAKELOCK_TAG = "commute:poll"
+        private const val WAKELOCK_TIMEOUT_MS = 30_000L
 
+        private fun pollPendingIntent(context: Context): PendingIntent = PendingIntent.getForegroundService(
+            context,
+            0,
+            Intent(context, WifiMonitorService::class.java).setAction(ACTION_POLL),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        /**
+         * Best-effort start. Android 12+ rejects starting a foreground service from the
+         * background (ForegroundServiceStartNotAllowedException) and 14+ additionally rejects a
+         * while-in-use type like `location` unless the app is in an eligible state — neither is
+         * knowable up front, so callers can't pre-check. Swallowing the refusal keeps a failed
+         * restart from taking the process down with it; the service is retried on the next
+         * foreground tick, and [onStartCommand] guards the same failure on its own side.
+         */
         fun start(context: Context) {
-            ContextCompat.startForegroundService(context, Intent(context, WifiMonitorService::class.java))
+            try {
+                ContextCompat.startForegroundService(context, Intent(context, WifiMonitorService::class.java))
+            } catch (e: Exception) {
+                // Couldn't start right now — not fatal, and not something the user can act on.
+            }
         }
 
         fun stop(context: Context) {
