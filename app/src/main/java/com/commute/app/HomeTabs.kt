@@ -255,7 +255,11 @@ fun RecordsTab(
     }
     if (addingEvent) {
         EditEventDialog(
-            event = blankEventTemplate(startOfDay(System.currentTimeMillis()), companySsid),
+            // remember-ed: the template reads the clock, so recomputing it inline produced a new
+            // (unequal) event on every recomposition, and EditEventDialog keys its editing state
+            // on that object — a background ARRIVE landing mid-entry silently reset the user's
+            // chosen type/date/time back to "now".
+            event = remember { blankEventTemplate(startOfDay(System.currentTimeMillis()), companySsid) },
             isNew = true,
             onSave = { created -> onAddEvent(created); addingEvent = false },
             onDelete = null,
@@ -604,7 +608,7 @@ private fun DayDetailDialog(
     }
     if (addingEvent) {
         EditEventDialog(
-            event = blankEventTemplate(day, companySsid),
+            event = remember(day) { blankEventTemplate(day, companySsid) },
             isNew = true,
             onSave = { created -> onAddEvent(created); addingEvent = false },
             onDelete = null,

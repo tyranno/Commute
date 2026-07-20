@@ -2,6 +2,7 @@ package com.commute.app
 
 import android.Manifest
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
@@ -68,6 +69,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
@@ -81,6 +85,11 @@ import com.commute.app.wifi.isCompanyWifiNearby
 import com.commute.app.wifi.nearbyWifiSsids
 import com.commute.app.wifi.requestWifiScan
 import kotlinx.coroutines.delay
+
+/** Process-scoped so the battery-optimization prompt survives navigating away from home and
+ * back, which recreates that destination's composition (and any remember'd flag with it). */
+private var batteryOptimizationAsked = false
+private var notificationPermissionAsked = false
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -165,14 +174,24 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
         ActivityResultContracts.StartActivityForResult()
     ) {}
     LaunchedEffect(Unit) {
+        // Asked at most once per process. This effect lives in the "home" nav destination, whose
+        // composition is disposed and recreated on every trip to 설정 — so a user who declines
+        // got the system dialog thrown at them again every single time they backed out.
+        if (batteryOptimizationAsked) return@LaunchedEffect
+        batteryOptimizationAsked = true
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
-            batteryOptLauncher.launch(
-                Intent(
-                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:${context.packageName}")
+            try {
+                batteryOptLauncher.launch(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${context.packageName}")
+                    )
                 )
-            )
+            } catch (e: ActivityNotFoundException) {
+                // Some ROMs ship no handler for this intent; it's an optimization, not a
+                // requirement, so carry on rather than crashing before the UI is even usable.
+            }
         }
     }
 
@@ -186,26 +205,34 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     // card's composition. Without this the label sits on 근무중 forever even after the absence
     // threshold has elapsed, disagreeing with the AWAY the service actually recorded.
     var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // Bound to STARTED, not to composition. A LaunchedEffect survives the activity being stopped,
+    // so this loop used to keep polling WifiManager and re-starting the service from the
+    // background — which Android 12+ rejects outright and 14+ rejects for a while-in-use service
+    // type, crashing the app precisely when the watchdog was supposed to save it. Suspending
+    // while invisible also drops the pointless background binder traffic.
     LaunchedEffect(hasLocationPermission, companySsid, companyBssids, lunchStartMinute, lunchEndMinute) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        while (true) {
-            nowTick = System.currentTimeMillis()
-            currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
-            val registeredSsid = companySsid
-            companyWifiDetectedNow = hasLocationPermission && registeredSsid != null &&
-                isCompanyWifiNearby(context, registeredSsid, companyBssids)
-            locationServicesEnabled = locationManager == null ||
-                LocationManagerCompat.isLocationEnabled(locationManager)
-            isLunchTimeNow = isWithinMinuteOfDayWindow(nowTick, lunchStartMinute, lunchEndMinute)
-            // Watchdog: the OS (Samsung's background app management in particular) can kill the
-            // foreground WifiMonitorService outside of a reboot, and nothing else restarts it —
-            // BootReceiver only fires on ACTUAL reboot. Re-issuing start() here is a no-op if the
-            // service is already alive (onStartCommand only spins up a new poll job when none is
-            // active), so this just makes opening the app the moment the service silently died.
-            if (monitoringEnabled && hasLocationPermission) {
-                WifiMonitorService.start(context)
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                nowTick = System.currentTimeMillis()
+                currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
+                val registeredSsid = companySsid
+                companyWifiDetectedNow = hasLocationPermission && registeredSsid != null &&
+                    isCompanyWifiNearby(context, registeredSsid, companyBssids)
+                locationServicesEnabled = locationManager == null ||
+                    LocationManagerCompat.isLocationEnabled(locationManager)
+                isLunchTimeNow = isWithinMinuteOfDayWindow(nowTick, lunchStartMinute, lunchEndMinute)
+                // Watchdog: the OS (Samsung's background app management in particular) can kill
+                // the foreground WifiMonitorService outside of a reboot, and nothing else
+                // restarts it — BootReceiver only fires on ACTUAL reboot. Re-issuing start() is a
+                // no-op when the service is already alive, so this just revives it the moment the
+                // user opens the app. Only legal while we're actually foreground, hence the gate.
+                if (monitoringEnabled && hasLocationPermission) {
+                    WifiMonitorService.start(context)
+                }
+                delay(60_000)
             }
-            delay(60_000)
         }
     }
 
@@ -215,6 +242,23 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
         permissionLauncher.launch(perms.toTypedArray())
+    }
+
+    // Notification permission is asked for independently of location. It used to ride along only
+    // with the location request, so anyone who granted location some other way (system settings,
+    // or an older install predating POST_NOTIFICATIONS) never got asked — and every 출근/퇴근/
+    // 자리비움 notification then silently no-oped with nothing to indicate why.
+    LaunchedEffect(hasLocationPermission) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
+        if (notificationPermissionAsked) return@LaunchedEffect
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionAsked = true
+            permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        }
     }
 
     Scaffold(

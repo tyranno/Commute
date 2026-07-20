@@ -19,6 +19,7 @@ import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
 import com.commute.app.wifi.WifiMonitorService
 import com.commute.app.wifi.nearbyBssidsFor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,9 +27,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class CommuteViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -84,7 +87,11 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         minuteTicker()
     ) { allEvents, lunchStart, lunchEnd, absenceThreshold, _ ->
         computeDailyWorkStats(allEvents, lunchStart, lunchEnd, absenceThreshold, System.currentTimeMillis())
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }
+        // viewModelScope is Main.immediate, so without this the whole history is re-crunched on
+        // the UI thread every minute — fine today, but it grows with every recorded day.
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val todayWorkedMinutes: StateFlow<Long> = dailyWorkStats
         .map { stats -> stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }?.workedMinutes ?: 0L }
@@ -100,8 +107,11 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
      * week the chart is currently paged to. */
     val weeklyWorkedMinutes: StateFlow<Long> = dailyWorkStats
         .map { stats ->
+            // Bounded at both ends: a mistyped future date used to add its hours to this week's
+            // tile while contributing no bar to the chart, so the two disagreed.
             val weekStart = startOfWeek(System.currentTimeMillis())
-            stats.filter { it.dayStart >= weekStart }.sumOf { it.workedMinutes }
+            val weekEnd = weekStart + 7 * 24 * 60 * 60 * 1000L
+            stats.filter { it.dayStart in weekStart until weekEnd }.sumOf { it.workedMinutes }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
@@ -193,16 +203,25 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val allEvents = dao.getAllOnce()
+                // Read straight from the repository rather than the StateFlows' .value — those
+                // only hold a value while something is subscribed, so a backup's correctness
+                // shouldn't depend on which screen happens to be composed right now.
                 val settings = BackupSettings(
-                    companySsid = companySsid.value,
-                    monitoringEnabled = monitoringEnabled.value,
-                    absenceThresholdMinutes = absenceThresholdMinutes.value,
-                    lunchStartMinute = lunchStartMinute.value,
-                    lunchEndMinute = lunchEndMinute.value
+                    companySsid = settingsRepository.companySsid.first(),
+                    companyBssids = settingsRepository.companyBssids.first(),
+                    monitoringEnabled = settingsRepository.monitoringEnabled.first(),
+                    absenceThresholdMinutes = settingsRepository.absenceThresholdMinutes.first(),
+                    lunchStartMinute = settingsRepository.lunchStartMinute.first(),
+                    lunchEndMinute = settingsRepository.lunchEndMinute.first(),
+                    showWeekend = settingsRepository.showWeekend.first()
                 )
-                val json = buildBackupJson(allEvents, settings, System.currentTimeMillis())
-                app.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
-                    ?: throw IllegalStateException("파일을 열 수 없습니다")
+                // Off the main thread: the SAF Uri can point at a cloud provider, so the write is
+                // potentially a network round-trip.
+                withContext(Dispatchers.IO) {
+                    val json = buildBackupJson(allEvents, settings, System.currentTimeMillis())
+                    app.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                        ?: throw IllegalStateException("파일을 열 수 없습니다")
+                }
                 Toast.makeText(app, "백업 완료 (${allEvents.size}건)", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(app, "백업 실패: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -211,23 +230,35 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Replaces all current events and durable settings with the contents of a backup file
-     * written by [exportBackup]. Transient service state (isAtWork/lastSeenAt/awaySinceAt)
-     * isn't restored — WifiMonitorService re-derives it from live Wi-Fi presence on its next
-     * poll, so at most it takes one extra poll cycle for the status card to catch up. */
+     * written by [exportBackup]. The live session state is wiped rather than carried over — the
+     * poll branches on isAtWork/lastSeenAt instead of re-deriving them, so keeping a stale
+     * "already at work" across a restore meant the next 출근 was never recorded. */
     fun importBackup(uri: Uri) {
         val app = getApplication<Application>()
         viewModelScope.launch {
             try {
-                val json = app.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
-                    ?: throw IllegalStateException("파일을 읽을 수 없습니다")
-                val parsed = parseBackupJson(json)
-                dao.deleteAll()
-                dao.insertAll(parsed.events)
+                // Stop the service first: it polls and writes on its own coroutine, and an event
+                // inserted between the delete and the insert would survive as an orphan.
+                WifiMonitorService.stop(app)
+                val parsed = withContext(Dispatchers.IO) {
+                    val json = app.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: throw IllegalStateException("파일을 읽을 수 없습니다")
+                    parseBackupJson(json)
+                }
+                dao.replaceAll(parsed.events)
+                settingsRepository.clearSessionState()
                 parsed.settings.companySsid?.let { settingsRepository.setCompanySsid(it) }
+                settingsRepository.setCompanyBssids(parsed.settings.companyBssids)
                 settingsRepository.setAbsenceThresholdMinutes(parsed.settings.absenceThresholdMinutes)
                 settingsRepository.setLunchWindow(parsed.settings.lunchStartMinute, parsed.settings.lunchEndMinute)
+                settingsRepository.setShowWeekend(parsed.settings.showWeekend)
                 setMonitoringEnabled(parsed.settings.monitoringEnabled)
-                Toast.makeText(app, "복원 완료 (${parsed.events.size}건)", Toast.LENGTH_SHORT).show()
+                val apNote = if (parsed.settings.companyBssids.isEmpty() && parsed.settings.companySsid != null) {
+                    " · 회사 AP 정보가 없어 이름만으로 감지합니다"
+                } else {
+                    ""
+                }
+                Toast.makeText(app, "복원 완료 (${parsed.events.size}건)$apNote", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
                 Toast.makeText(app, "복원 실패: ${e.message}", Toast.LENGTH_SHORT).show()
             }
