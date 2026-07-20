@@ -103,6 +103,19 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it.remove(Keys.PROVISIONAL_AWAY_SINCE_AT) }
     }
 
+    /** Wipes the live session state so detection starts over from "not at work". Needed after a
+     * backup restore: the poll *branches on* these values rather than re-deriving them, so a
+     * leftover isAtWork=true made the service treat the restored day as already-arrived and skip
+     * recording that day's 출근 entirely. */
+    suspend fun clearSessionState() {
+        context.dataStore.edit {
+            it.remove(Keys.IS_AT_WORK)
+            it.remove(Keys.LAST_SEEN_AT)
+            it.remove(Keys.AWAY_SINCE_AT)
+            it.remove(Keys.PROVISIONAL_AWAY_SINCE_AT)
+        }
+    }
+
     suspend fun setAbsenceThresholdMinutes(minutes: Int) {
         context.dataStore.edit { it[Keys.ABSENCE_THRESHOLD_MINUTES] = minutes }
     }

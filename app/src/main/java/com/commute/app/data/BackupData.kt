@@ -5,15 +5,25 @@ import org.json.JSONObject
 
 private const val BACKUP_FORMAT_VERSION = 1
 
-/** The durable, user-configured settings worth carrying across an app uninstall/reinstall —
- * not transient service state like [SettingsRepository.isAtWork]/lastSeenAt/awaySinceAt, which
- * WifiMonitorService just re-derives from live Wi-Fi presence on its next poll. */
+/**
+ * The durable, user-configured settings worth carrying across an app uninstall/reinstall — not
+ * transient session state (isAtWork/lastSeenAt/awaySinceAt/provisionalAwaySinceAt), which
+ * [CommuteViewModel.importBackup] resets so the service starts the next poll from a clean slate.
+ *
+ * This must stay in step with [SettingsRepository.Keys]: anything durable that's missing here is
+ * silently lost on restore. [companyBssids] is the cautionary case — it was added to settings
+ * long after this class, and without it a restore left the office SSID registered with no APs,
+ * which falls back to name-only matching and re-creates the false 출퇴근 records that BSSID
+ * matching exists to prevent.
+ */
 data class BackupSettings(
     val companySsid: String?,
+    val companyBssids: Set<String>,
     val monitoringEnabled: Boolean,
     val absenceThresholdMinutes: Int,
     val lunchStartMinute: Int,
-    val lunchEndMinute: Int
+    val lunchEndMinute: Int,
+    val showWeekend: Boolean
 )
 
 data class ParsedBackup(val settings: BackupSettings, val events: List<CommuteEvent>)
@@ -30,10 +40,12 @@ fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, export
         "settings",
         JSONObject().apply {
             put("companySsid", settings.companySsid ?: JSONObject.NULL)
+            put("companyBssids", JSONArray().apply { settings.companyBssids.forEach { put(it) } })
             put("monitoringEnabled", settings.monitoringEnabled)
             put("absenceThresholdMinutes", settings.absenceThresholdMinutes)
             put("lunchStartMinute", settings.lunchStartMinute)
             put("lunchEndMinute", settings.lunchEndMinute)
+            put("showWeekend", settings.showWeekend)
         }
     )
     root.put(
@@ -62,13 +74,19 @@ fun parseBackupJson(json: String): ParsedBackup {
     val settingsJson = root.getJSONObject("settings")
     val settings = BackupSettings(
         companySsid = if (settingsJson.isNull("companySsid")) null else settingsJson.optString("companySsid", "").ifBlank { null },
+        // Absent in v1 backups — an older file legitimately has no BSSIDs, and an empty set is
+        // exactly the "not registered yet" state, so defaulting to empty is correct here.
+        companyBssids = settingsJson.optJSONArray("companyBssids")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it, "").ifBlank { null } }.toSet()
+        } ?: emptySet(),
         monitoringEnabled = settingsJson.optBoolean("monitoringEnabled", false),
         absenceThresholdMinutes = settingsJson.optInt(
             "absenceThresholdMinutes",
             SettingsRepository.DEFAULT_ABSENCE_THRESHOLD_MINUTES
         ),
         lunchStartMinute = settingsJson.optInt("lunchStartMinute", SettingsRepository.DEFAULT_LUNCH_START_MINUTE),
-        lunchEndMinute = settingsJson.optInt("lunchEndMinute", SettingsRepository.DEFAULT_LUNCH_END_MINUTE)
+        lunchEndMinute = settingsJson.optInt("lunchEndMinute", SettingsRepository.DEFAULT_LUNCH_END_MINUTE),
+        showWeekend = settingsJson.optBoolean("showWeekend", false)
     )
     val eventsJson = root.getJSONArray("events")
     val events = (0 until eventsJson.length()).map { index ->
