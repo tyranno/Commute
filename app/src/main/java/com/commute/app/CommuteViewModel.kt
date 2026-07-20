@@ -18,11 +18,13 @@ import com.commute.app.data.parseBackupJson
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
 import com.commute.app.wifi.WifiMonitorService
+import com.commute.app.wifi.nearbyBssidsFor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -35,6 +37,9 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     val companySsid: StateFlow<String?> = settingsRepository.companySsid
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val companyBssids: StateFlow<Set<String>> = settingsRepository.companyBssids
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     val monitoringEnabled: StateFlow<Boolean> = settingsRepository.monitoringEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
@@ -67,11 +72,6 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     val showWeekend: StateFlow<Boolean> = settingsRepository.showWeekend
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    /** Events from Monday of this week onward, for the 기록 tab's scrollable list. */
-    val weekEvents: StateFlow<List<CommuteEvent>> = events
-        .map { all -> all.filter { it.timestamp >= startOfWeek(System.currentTimeMillis()) } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Worked-minutes per day across all recorded history (not just this week), so the 현황
      * tab's chart can page back through past weeks — re-ticked every minute so "today" advances
@@ -112,8 +112,44 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         findMissingRecords(allEvents, System.currentTimeMillis())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Registers [ssid] as the office network and pins it to the APs currently broadcasting that
+     * name, so a same-named network somewhere else can't later be mistaken for the office. */
     fun registerCompanySsid(ssid: String) {
-        viewModelScope.launch { settingsRepository.setCompanySsid(ssid) }
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            settingsRepository.setCompanySsid(ssid)
+            val bssids = nearbyBssidsFor(app, ssid)
+            settingsRepository.setCompanyBssids(bssids)
+            if (bssids.isEmpty()) {
+                // Registering from a stale scan list while out of range captures nothing, which
+                // silently falls back to name-only matching — the exact failure that logged a
+                // whole 출근/퇴근 pair off an unrelated "iptime5G". Say so instead of degrading quietly.
+                Toast.makeText(app, "AP를 찾지 못해 이름만으로 감지합니다. 회사에서 설정 > 회사 AP 등록을 눌러주세요", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** Adds any currently-visible AP broadcasting the registered SSID to the known-office set —
+     * for offices whose other APs weren't in range at registration time, or newly added ones. */
+    fun addNearbyCompanyBssids() {
+        val app = getApplication<Application>()
+        val ssid = companySsid.value ?: return
+        viewModelScope.launch {
+            val found = nearbyBssidsFor(app, ssid)
+            if (found.isEmpty()) {
+                Toast.makeText(app, "주변에 ${ssid} AP가 보이지 않습니다", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val merged = settingsRepository.companyBssids.first() + found
+            settingsRepository.setCompanyBssids(merged)
+            Toast.makeText(app, "회사 AP ${merged.size}대 등록됨", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun removeCompanyBssid(bssid: String) {
+        viewModelScope.launch {
+            settingsRepository.setCompanyBssids(settingsRepository.companyBssids.first() - bssid)
+        }
     }
 
     fun setMonitoringEnabled(enabled: Boolean) {

@@ -282,7 +282,7 @@ private fun combineDateTime(dateMillis: Long, hour: Int, minute: Int): Long =
 /** Material3's [androidx.compose.material3.DatePickerState] always represents the selected date
  * as midnight UTC, regardless of device timezone — converting a local-midnight timestamp to/from
  * that representation avoids the picker showing a day off from what was actually stored. */
-private fun localMidnightToUtcMillis(localMidnight: Long): Long {
+fun localMidnightToUtcMillis(localMidnight: Long): Long {
     val local = Calendar.getInstance().apply { timeInMillis = localMidnight }
     return Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
         clear()
@@ -290,7 +290,7 @@ private fun localMidnightToUtcMillis(localMidnight: Long): Long {
     }.timeInMillis
 }
 
-private fun utcMillisToLocalMidnight(utcMillis: Long): Long {
+fun utcMillisToLocalMidnight(utcMillis: Long): Long {
     val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = utcMillis }
     return Calendar.getInstance().apply {
         clear()

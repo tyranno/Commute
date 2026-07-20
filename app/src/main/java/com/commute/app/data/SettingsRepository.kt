@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -16,6 +17,7 @@ class SettingsRepository(private val context: Context) {
 
     private object Keys {
         val COMPANY_SSID = stringPreferencesKey("company_ssid")
+        val COMPANY_BSSIDS = stringSetPreferencesKey("company_bssids")
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
         val IS_AT_WORK = booleanPreferencesKey("is_at_work")
         val LAST_SEEN_AT = longPreferencesKey("last_seen_at")
@@ -28,6 +30,12 @@ class SettingsRepository(private val context: Context) {
     }
 
     val companySsid: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_SSID] }
+
+    /** BSSIDs (AP hardware addresses) that count as "the office" — an SSID name alone isn't
+     * unique enough, since common defaults like "iptime5G" exist in many buildings. A set, not a
+     * single value, because an office usually runs several APs on the same SSID. Empty means
+     * "registered before BSSID matching existed", which falls back to SSID-only detection. */
+    val companyBssids: Flow<Set<String>> = context.dataStore.data.map { it[Keys.COMPANY_BSSIDS] ?: emptySet() }
     val monitoringEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.MONITORING_ENABLED] ?: false }
     val isAtWork: Flow<Boolean> = context.dataStore.data.map { it[Keys.IS_AT_WORK] ?: false }
     val lastSeenAt: Flow<Long?> = context.dataStore.data.map { it[Keys.LAST_SEEN_AT] }
@@ -61,6 +69,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setCompanySsid(ssid: String) {
         context.dataStore.edit { it[Keys.COMPANY_SSID] = ssid }
+    }
+
+    suspend fun setCompanyBssids(bssids: Set<String>) {
+        context.dataStore.edit { it[Keys.COMPANY_BSSIDS] = bssids }
     }
 
     suspend fun setMonitoringEnabled(enabled: Boolean) {

@@ -84,43 +84,42 @@ fun computeDailyWorkStats(
 
         val rawMinutes = (sessionEnd - recognizedStart) / 60_000
         val lunchMinutes = lunchOverlapMinutes(recognizedStart, sessionEnd, lunchStartMinute, lunchEndMinute)
-        val longAwayMinutes = awaySpans.sumOf { (awayStart, awayEnd) ->
-            val awayMinutes = (awayEnd - awayStart) / 60_000
-            if (awayMinutes < absenceThresholdMinutes) return@sumOf 0L
-            (awayMinutes - lunchOverlapMinutes(awayStart, awayEnd, lunchStartMinute, lunchEndMinute)).coerceAtLeast(0)
-        }
+        val longAwayMinutes = deductibleAwayMinutes(
+            awaySpans, recognizedStart, sessionEnd, absenceThresholdMinutes, lunchStartMinute, lunchEndMinute
+        )
         val minutes = rawMinutes - lunchMinutes - longAwayMinutes
         val acc = byDay.getOrPut(startOfDay(sessionStart)) { DayAccum() }
         acc.minutes += minutes.coerceAtLeast(0)
-        acc.rawMinutes += rawMinutes.coerceAtLeast(0)
+        // "Present, lunch included" = worked time with only the lunch deduction added back. Long
+        // absences must stay deducted here too — the user genuinely wasn't present for those.
+        acc.rawMinutes += (minutes + lunchMinutes).coerceAtLeast(0)
         if (acc.firstArrive == null || recognizedStart < acc.firstArrive!!) acc.firstArrive = recognizedStart
         acc.open = stillOpen
         if (!stillOpen && (acc.lastLeave == null || sessionEnd > acc.lastLeave!!)) acc.lastLeave = sessionEnd
     }
 
+    // Collected up front rather than accumulated per-session: [deductibleAwayMinutes] selects the
+    // ones overlapping each session's window, which also catches an AWAY that starts just before
+    // its session's ARRIVE (possible via manual entry) — threading a "pending" list through the
+    // loop would silently drop those, since they're visited before the ARRIVE is seen.
+    val allAwaySpans = sorted.mapNotNull { event ->
+        if (event.type != CommuteEventType.AWAY) null
+        else event.endTimestamp?.let { end -> event.timestamp to end }
+    }
+
     var pendingArriveAt: Long? = null
-    var pendingAwaySpans = mutableListOf<Pair<Long, Long>>()
     for (event in sorted) {
         when (event.type) {
-            CommuteEventType.ARRIVE -> {
-                pendingArriveAt = event.timestamp
-                pendingAwaySpans = mutableListOf()
-            }
+            CommuteEventType.ARRIVE -> pendingArriveAt = event.timestamp
             CommuteEventType.LEAVE -> {
                 val arriveAt = pendingArriveAt ?: continue
                 pendingArriveAt = null
-                closeSession(arriveAt, event.timestamp, stillOpen = false, awaySpans = pendingAwaySpans)
-                pendingAwaySpans = mutableListOf()
+                closeSession(arriveAt, event.timestamp, stillOpen = false, awaySpans = allAwaySpans)
             }
-            CommuteEventType.AWAY -> {
-                val awayEnd = event.endTimestamp
-                if (pendingArriveAt != null && awayEnd != null) {
-                    pendingAwaySpans.add(event.timestamp to awayEnd)
-                }
-            }
+            CommuteEventType.AWAY -> Unit
         }
     }
-    pendingArriveAt?.let { closeSession(it, nowMillis, stillOpen = true, awaySpans = pendingAwaySpans) }
+    pendingArriveAt?.let { closeSession(it, nowMillis, stillOpen = true, awaySpans = allAwaySpans) }
 
     return byDay.entries.map { (day, acc) ->
         DailyWorkStat(day, acc.minutes, acc.rawMinutes, acc.firstArrive, acc.lastLeave, acc.open)
@@ -169,6 +168,61 @@ fun findMissingRecords(events: List<CommuteEvent>, nowMillis: Long): List<Missin
         }
     }
     return flags.sortedByDescending { it.event.timestamp }
+}
+
+/**
+ * Minutes to subtract from a session for absences that reached [absenceThresholdMinutes].
+ *
+ * Each span is clamped to the session's *recognized* window before being measured: time outside
+ * it (before the 07:00 recognition start, or past the session end) was never counted as worked in
+ * the first place, so deducting it would remove it twice — that cost ~45 minutes on a day with an
+ * early arrival and a pre-07:00 absence. The threshold test uses the span's real duration, since
+ * "was this a 자리비움" is about how long the person was actually away, not how much of it happens
+ * to be recognized work time.
+ *
+ * Overlapping spans are merged so shared time is only deducted once, and the lunch window is
+ * derived from the session's own day so it lines up exactly with the session-level lunch
+ * subtraction — computing it per-span instead would use the wrong day for an overnight session
+ * and credit unpaid lunch as worked time.
+ */
+private fun deductibleAwayMinutes(
+    awaySpans: List<Pair<Long, Long>>,
+    recognizedStart: Long,
+    sessionEnd: Long,
+    absenceThresholdMinutes: Int,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int
+): Long {
+    val clamped = awaySpans
+        .filter { (start, end) -> (end - start) / 60_000 >= absenceThresholdMinutes }
+        .map { (start, end) -> maxOf(start, recognizedStart) to minOf(end, sessionEnd) }
+        .filter { (start, end) -> end > start }
+        .sortedBy { it.first }
+    if (clamped.isEmpty()) return 0
+
+    val merged = mutableListOf<Pair<Long, Long>>()
+    for ((start, end) in clamped) {
+        val last = merged.lastOrNull()
+        if (last != null && start <= last.second) {
+            merged[merged.lastIndex] = last.first to maxOf(last.second, end)
+        } else {
+            merged.add(start to end)
+        }
+    }
+
+    val lunchStart = timestampAtMinuteOfDay(recognizedStart, lunchStartMinute)
+    val lunchEnd = timestampAtMinuteOfDay(recognizedStart, lunchEndMinute)
+    // Summed in millis and divided once, so per-span truncation doesn't compound into
+    // several minutes of drift across a day with many absences.
+    val totalMs = merged.sumOf { (start, end) ->
+        val lunchOverlap = if (lunchStartMinute < lunchEndMinute) {
+            (minOf(end, lunchEnd) - maxOf(start, lunchStart)).coerceAtLeast(0)
+        } else {
+            0L
+        }
+        (end - start - lunchOverlap).coerceAtLeast(0)
+    }
+    return totalMs / 60_000
 }
 
 /** Minutes of [sessionStart, sessionEnd) that fall inside the configured lunch window

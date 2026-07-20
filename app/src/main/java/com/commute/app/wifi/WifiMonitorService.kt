@@ -88,7 +88,8 @@ class WifiMonitorService : Service() {
             val companySsid = settingsRepository.companySsid.first()
             if (companySsid.isNullOrBlank()) return@withLock
 
-            val companyWifiNearby = isCompanyWifiNearby(applicationContext, companySsid)
+            val companyBssids = settingsRepository.companyBssids.first()
+            val companyWifiNearby = isCompanyWifiNearby(applicationContext, companySsid, companyBssids)
             var wasAtWork = settingsRepository.isAtWork.first()
             val now = System.currentTimeMillis()
 
@@ -98,12 +99,28 @@ class WifiMonitorService : Service() {
             // last tick we actually observed the company SSID, then fall through so a fresh
             // ARRIVE can be recorded for today if we're still connected.
             if (wasAtWork) {
-                val lastSeen = settingsRepository.lastSeenAt.first()
-                if (lastSeen != null && !isSameDay(lastSeen, now)) {
-                    recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
+                val lastSeen = settingsRepository.lastSeenAt.first() ?: settingsRepository.awaySinceAt.first()
+                if (lastSeen == null) {
+                    // "At work" with no timestamp at all is corrupt state (an older build could
+                    // land here if it was killed between the ARRIVE insert and its first
+                    // setLastSeenAt). There's no defensible stamp to close the session with, and
+                    // leaving it would wedge the app permanently — isAtWork stays true, so no
+                    // future ARRIVE is ever recorded. Reset so detection resumes; the orphaned
+                    // ARRIVE row surfaces in the 기록 누락 banner for the user to correct.
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
+                    wasAtWork = false
+                } else if (!isSameDay(lastSeen, now)) {
+                    // State first, insert second. This coroutine is cancelled whenever the
+                    // service stops (every monitoring toggle), and a cancel *between* the two
+                    // would otherwise leave isAtWork=true with a stale lastSeenAt — re-inserting
+                    // an identical LEAVE on every 60s poll, forever. Losing one event to a cancel
+                    // is recoverable via the 기록 누락 banner; an insert loop is not.
+                    settingsRepository.setIsAtWork(false)
+                    settingsRepository.clearAwaySinceAt()
+                    settingsRepository.clearProvisionalAwaySinceAt()
+                    recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
                     showEventNotification(
                         applicationContext,
                         "퇴근 기록됨",
@@ -118,9 +135,13 @@ class WifiMonitorService : Service() {
                 // disconnect, so there's nothing to record for it — just clear it, whether this
                 // poll is a fresh ARRIVE or a reconnect while already at work.
                 settingsRepository.clearProvisionalAwaySinceAt()
+                // Written before anything else so the invariant "isAtWork implies lastSeenAt is
+                // set" can't be broken by a cancel mid-poll: lastSeenAt is the only stamp the
+                // day-boundary net can close a session with, and losing it strands the session.
+                settingsRepository.setLastSeenAt(now)
                 if (!wasAtWork) {
-                    recordEvent(CommuteEventType.ARRIVE, companySsid, now)
                     settingsRepository.setIsAtWork(true)
+                    recordEvent(CommuteEventType.ARRIVE, companySsid, now)
                     showEventNotification(
                         applicationContext,
                         "출근 기록됨",
@@ -135,6 +156,10 @@ class WifiMonitorService : Service() {
                     val awaySince = settingsRepository.awaySinceAt.first()
                     if (awaySince != null) {
                         val thresholdMs = settingsRepository.absenceThresholdMinutes.first() * 60_000L
+                        // Cleared before the insert for the same reason as the LEAVE above — a
+                        // cancel in between would leave awaySinceAt set and re-insert the very
+                        // same AWAY on every following poll.
+                        settingsRepository.clearAwaySinceAt()
                         if (now - awaySince >= thresholdMs) {
                             recordEvent(CommuteEventType.AWAY, companySsid, awaySince, endTimestamp = now)
                             showEventNotification(
@@ -143,10 +168,8 @@ class WifiMonitorService : Service() {
                                 "복귀 ${timeFormat.format(Date(now))} (자리비움 ${minutesBetween(awaySince, now)}분)"
                             )
                         }
-                        settingsRepository.clearAwaySinceAt()
                     }
                 }
-                settingsRepository.setLastSeenAt(now)
             } else if (wasAtWork) {
                 // A single missed poll doesn't start the away timer by itself — it's just as
                 // likely a brief reassociation/DHCP renewal blip as a real disconnect. Only a

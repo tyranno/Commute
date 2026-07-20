@@ -20,16 +20,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +55,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.DailyWorkStat
@@ -149,6 +155,7 @@ fun StatusTab(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordsTab(
     events: List<CommuteEvent>,
@@ -163,16 +170,55 @@ fun RecordsTab(
     var addingEvent by remember { mutableStateOf(false) }
     var fixingFlag by remember { mutableStateOf<MissingRecordFlag?>(null) }
 
+    // Null bound = unrestricted on that side, so the default (both null) shows every record —
+    // 기록 탭 used to only ever show "this week" with no way to look further back.
+    var filterStart by remember { mutableStateOf<Long?>(null) }
+    var filterEnd by remember { mutableStateOf<Long?>(null) }
+    var showStartDatePicker by remember { mutableStateOf(false) }
+    var showEndDatePicker by remember { mutableStateOf(false) }
+    val filteredEvents = events.filter { event ->
+        val day = startOfDay(event.timestamp)
+        (filterStart == null || day >= filterStart!!) && (filterEnd == null || day <= filterEnd!!)
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
-        if (events.isEmpty() && missingRecords.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("이번주 기록이 없습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else {
-            Column(Modifier.fillMaxSize()) {
-                if (missingRecords.isNotEmpty()) {
-                    MissingRecordsBanner(missingRecords, onFix = { fixingFlag = it })
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PickerField(
+                    label = "시작일",
+                    value = filterStart?.let(::formatDateShort) ?: "전체",
+                    icon = Icons.Filled.CalendarToday,
+                    onClick = { showStartDatePicker = true },
+                    modifier = Modifier.weight(1f)
+                )
+                PickerField(
+                    label = "종료일",
+                    value = filterEnd?.let(::formatDateShort) ?: "전체",
+                    icon = Icons.Filled.CalendarToday,
+                    onClick = { showEndDatePicker = true },
+                    modifier = Modifier.weight(1f)
+                )
+                if (filterStart != null || filterEnd != null) {
+                    TextButton(onClick = { filterStart = null; filterEnd = null }) { Text("전체") }
                 }
+            }
+            if (missingRecords.isNotEmpty()) {
+                MissingRecordsBanner(missingRecords, onFix = { fixingFlag = it })
+            }
+            // Guards on the list alone, not on the banner too — with a missing-record flag
+            // present, an empty date range would otherwise render the edit hint above a blank
+            // list with no "이 기간에 기록이 없습니다" to explain it.
+            if (filteredEvents.isEmpty()) {
+                Box(Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (filterStart == null && filterEnd == null) "기록이 없습니다." else "이 기간에 기록이 없습니다.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
                 Text(
                     "기록을 눌러 잘못 인식된 유형이나 시각을 고치거나 삭제할 수 있습니다.",
                     style = MaterialTheme.typography.bodySmall,
@@ -184,7 +230,7 @@ fun RecordsTab(
                     contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    items(events.sortedByDescending { it.timestamp }, key = { it.id }) { event ->
+                    items(filteredEvents.sortedByDescending { it.timestamp }, key = { it.id }) { event ->
                         EventRow(event, onClick = { editingEvent = event })
                     }
                 }
@@ -225,7 +271,41 @@ fun RecordsTab(
             onDismiss = { fixingFlag = null }
         )
     }
+
+    if (showStartDatePicker) {
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = localMidnightToUtcMillis(filterStart ?: startOfDay(System.currentTimeMillis()))
+        )
+        DatePickerDialog(
+            onDismissRequest = { showStartDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { filterStart = utcMillisToLocalMidnight(it) }
+                    showStartDatePicker = false
+                }) { Text("확인") }
+            },
+            dismissButton = { TextButton(onClick = { showStartDatePicker = false }) { Text("취소") } }
+        ) { DatePicker(state = state) }
+    }
+    if (showEndDatePicker) {
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = localMidnightToUtcMillis(filterEnd ?: startOfDay(System.currentTimeMillis()))
+        )
+        DatePickerDialog(
+            onDismissRequest = { showEndDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { filterEnd = utcMillisToLocalMidnight(it) }
+                    showEndDatePicker = false
+                }) { Text("확인") }
+            },
+            dismissButton = { TextButton(onClick = { showEndDatePicker = false }) { Text("취소") } }
+        ) { DatePicker(state = state) }
+    }
 }
+
+private fun formatDateShort(timestamp: Long): String =
+    SimpleDateFormat("M/d", Locale.getDefault()).format(Date(timestamp))
 
 /** Lists ARRIVE/LEAVE events missing their other half (see [findMissingRecords]) with a quick
  * "add the missing one" action per row — these are the same cases [computeDailyWorkStats]
@@ -319,6 +399,9 @@ private fun WeeklyRangeChart(
     val maxBarWidthPx = with(density) { 24.dp.toPx() }
     val textMeasurer = rememberTextMeasurer()
     val labelStyle = MaterialTheme.typography.labelSmall.copy(color = labelColor)
+    // Smaller than the axis labels so the per-bar times read as annotations on the bar rather
+    // than competing with the axis itself.
+    val barTimeStyle = MaterialTheme.typography.labelSmall.copy(color = labelColor, fontSize = 9.sp)
     val axisLabelWidthPx = with(density) { 34.dp.toPx() }
 
     fun minuteOfDay(timestamp: Long): Int {
@@ -403,6 +486,34 @@ private fun WeeklyRangeChart(
                     addRoundRect(RoundRect(rect = Rect(left, top, left + barWidth, bottom), cornerRadius = corner))
                 }
                 drawPath(path, color = barColor.copy(alpha = alpha))
+
+                // Times annotated directly on the bar — arrival just under its bottom edge,
+                // departure just above its top edge — so the chart answers "몇 시에 출퇴근했나"
+                // without tapping. Centered on the bar and clamped inside the canvas; the upper
+                // bounds go through coerceAtLeast(0f) first because a degenerate canvas height
+                // would otherwise make coerceIn's range invalid and crash (this chart has hit
+                // exactly that before).
+                val labelGap = 2.dp.toPx()
+                val centerX = left + barWidth / 2f
+                fun drawBarTime(text: String, y: Float) {
+                    val measured = textMeasurer.measure(text, style = barTimeStyle)
+                    val maxX = (size.width - measured.size.width).coerceAtLeast(0f)
+                    val maxY = (size.height - measured.size.height).coerceAtLeast(0f)
+                    drawText(
+                        measured,
+                        topLeft = Offset(
+                            (centerX - measured.size.width / 2f).coerceIn(0f, maxX),
+                            y.coerceIn(0f, maxY)
+                        )
+                    )
+                }
+                drawBarTime(formatTimeOnly(arriveAt), bottom + labelGap)
+                // An open session's "top" is just the current time, not a departure — labelling
+                // it 퇴근 would be a time the user hasn't actually left at.
+                if (!stat.open) {
+                    val departMeasured = textMeasurer.measure(formatTimeOnly(departAt), style = barTimeStyle)
+                    drawBarTime(formatTimeOnly(departAt), top - departMeasured.size.height - labelGap)
+                }
 
                 // Mark the portion of the bar that falls inside the configured lunch window —
                 // it's excluded from worked time, so it reads visually as a break in the bar.

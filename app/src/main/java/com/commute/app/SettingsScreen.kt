@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Weekend
 import androidx.compose.material3.Button
@@ -33,6 +34,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberTimePickerState
@@ -59,6 +61,8 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     onOpenPolicyDocument: () -> Unit = {}
 ) {
+    val companySsid by viewModel.companySsid.collectAsState()
+    val companyBssids by viewModel.companyBssids.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
@@ -91,6 +95,37 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            RuleCard(
+                icon = Icons.Filled.Router,
+                title = "회사 AP 등록 (${companyBssids.size}대)"
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (companyBssids.isEmpty()) {
+                        Text(
+                            "AP가 등록되지 않아 와이파이 이름만으로 감지합니다. 같은 이름의 다른 와이파이도 회사로 인식될 수 있으니, 회사에서 아래 버튼을 눌러 등록하세요.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        companyBssids.sorted().forEach { bssid ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(bssid, style = MaterialTheme.typography.bodyMedium)
+                                TextButton(onClick = { viewModel.removeCompanyBssid(bssid) }) { Text("삭제") }
+                            }
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = viewModel::addNearbyCompanyBssids,
+                        enabled = companySsid != null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("지금 보이는 ${companySsid ?: "회사"} AP 등록") }
+                }
+            }
+
             RuleCard(
                 icon = Icons.AutoMirrored.Filled.DirectionsWalk,
                 title = "자리비움 인정 기준(분)"

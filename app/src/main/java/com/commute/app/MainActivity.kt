@@ -122,12 +122,12 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
 fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val companySsid by viewModel.companySsid.collectAsState()
+    val companyBssids by viewModel.companyBssids.collectAsState()
     val monitoringEnabled by viewModel.monitoringEnabled.collectAsState()
     val isAtWork by viewModel.isAtWork.collectAsState()
     val awaySinceAt by viewModel.awaySinceAt.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val allEvents by viewModel.events.collectAsState()
-    val weekEvents by viewModel.weekEvents.collectAsState()
     val todayWorkedMinutes by viewModel.todayWorkedMinutes.collectAsState()
     val todayWorkedMinutesIncludingLunch by viewModel.todayWorkedMinutesIncludingLunch.collectAsState()
     val weeklyWorkedMinutes by viewModel.weeklyWorkedMinutes.collectAsState()
@@ -180,16 +180,23 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     var companyWifiDetectedNow by remember { mutableStateOf(false) }
     var locationServicesEnabled by remember { mutableStateOf(true) }
     var isLunchTimeNow by remember { mutableStateOf(false) }
-    LaunchedEffect(hasLocationPermission, companySsid, lunchStartMinute, lunchEndMinute) {
+    // "Now" has to be state, not a bare System.currentTimeMillis() read inside the card: the
+    // 자리비움 label depends on how much time has passed since the disconnect, and once the wifi
+    // is gone every poll writes identical values, so nothing else would ever invalidate the
+    // card's composition. Without this the label sits on 근무중 forever even after the absence
+    // threshold has elapsed, disagreeing with the AWAY the service actually recorded.
+    var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(hasLocationPermission, companySsid, companyBssids, lunchStartMinute, lunchEndMinute) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         while (true) {
+            nowTick = System.currentTimeMillis()
             currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
             val registeredSsid = companySsid
             companyWifiDetectedNow = hasLocationPermission && registeredSsid != null &&
-                isCompanyWifiNearby(context, registeredSsid)
+                isCompanyWifiNearby(context, registeredSsid, companyBssids)
             locationServicesEnabled = locationManager == null ||
                 LocationManagerCompat.isLocationEnabled(locationManager)
-            isLunchTimeNow = isWithinMinuteOfDayWindow(System.currentTimeMillis(), lunchStartMinute, lunchEndMinute)
+            isLunchTimeNow = isWithinMinuteOfDayWindow(nowTick, lunchStartMinute, lunchEndMinute)
             // Watchdog: the OS (Samsung's background app management in particular) can kill the
             // foreground WifiMonitorService outside of a reboot, and nothing else restarts it —
             // BootReceiver only fires on ACTUAL reboot. Re-issuing start() here is a no-op if the
@@ -262,6 +269,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     companyWifiDetectedNow = companyWifiDetectedNow,
                     awaySinceAt = awaySinceAt,
                     absenceThresholdMinutes = absenceThresholdMinutes,
+                    nowMillis = nowTick,
                     isLunchTimeNow = isLunchTimeNow,
                     currentSsid = currentSsid,
                     companySsid = companySsid,
@@ -314,7 +322,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         modifier = Modifier.weight(1f)
                     )
                     else -> RecordsTab(
-                        events = weekEvents,
+                        events = allEvents,
                         missingRecords = missingRecords,
                         companySsid = companySsid,
                         onAddEvent = viewModel::addEvent,
@@ -331,7 +339,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
 /**
  * Four displayable states, derived from the two real signals the app tracks: [isAtWork] (the
  * committed session state the background service maintains) and whether the company Wi-Fi is
- * detected in the live 3-second poll right now. This surfaces the gap between "we can see the
+ * detected in the live 60-second poll right now. This surfaces the gap between "we can see the
  * wifi" and "the service has officially logged it" (up to a minute later on its own 1-minute
  * cadence) as its own state, instead of leaving the user staring at a stale "퇴근" label.
  */
@@ -351,10 +359,11 @@ private fun commuteStatus(
     isAtWork: Boolean,
     detectedNow: Boolean,
     awaySinceAt: Long?,
-    absenceThresholdMinutes: Int
+    absenceThresholdMinutes: Int,
+    nowMillis: Long
 ): CommuteStatus {
     val pastAwayThreshold = awaySinceAt != null &&
-        System.currentTimeMillis() - awaySinceAt >= absenceThresholdMinutes * 60_000L
+        nowMillis - awaySinceAt >= absenceThresholdMinutes * 60_000L
     return when {
         isAtWork && detectedNow -> CommuteStatus.WORKING
         isAtWork && !detectedNow && pastAwayThreshold -> CommuteStatus.AWAY
@@ -370,6 +379,7 @@ private fun CompactStatusCard(
     companyWifiDetectedNow: Boolean,
     awaySinceAt: Long?,
     absenceThresholdMinutes: Int,
+    nowMillis: Long,
     isLunchTimeNow: Boolean,
     currentSsid: String?,
     companySsid: String?,
@@ -379,7 +389,7 @@ private fun CompactStatusCard(
     onOpenWifiSearch: () -> Unit,
     onMonitoringChange: (Boolean) -> Unit
 ) {
-    val status = commuteStatus(isAtWork, companyWifiDetectedNow, awaySinceAt, absenceThresholdMinutes)
+    val status = commuteStatus(isAtWork, companyWifiDetectedNow, awaySinceAt, absenceThresholdMinutes, nowMillis)
     val containerColor = when (status) {
         CommuteStatus.WORKING -> MaterialTheme.colorScheme.primaryContainer
         CommuteStatus.ARRIVAL_DETECTED, CommuteStatus.AWAY -> MaterialTheme.colorScheme.tertiaryContainer
