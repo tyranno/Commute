@@ -25,6 +25,8 @@ fun startOfWeek(timestamp: Long): Long {
  * 근무 시간은 07:00부터 인정. */
 private const val WORK_RECOGNITION_START_MINUTE = 7 * 60
 
+private const val DAY_MILLIS = 24 * 60 * 60 * 1000L
+
 /**
  * Worked minutes for the day starting at [dayStart], plus that day's overall span — the
  * earliest ARRIVE and the latest LEAVE (or null/[open] if the last session hasn't closed
@@ -107,10 +109,26 @@ fun computeDailyWorkStats(
         else event.endTimestamp?.let { end -> event.timestamp to end }
     }
 
+    // An unclosed session is only "still running" on the day it started — a dangling ARRIVE from
+    // a past day (monitoring toggled off mid-session, or the service killed before it could
+    // record a LEAVE) must not keep accruing. Left uncapped it billed every hour since, so a
+    // week-old open session read as 144시간 while its chart bar showed one hour. Capping at the
+    // end of its own day keeps the number bounded and plausible; 기록 누락 already flags it for
+    // the user to correct properly.
+    fun openSessionEnd(arriveAt: Long): Long = minOf(nowMillis, startOfDay(arriveAt) + DAY_MILLIS)
+
     var pendingArriveAt: Long? = null
     for (event in sorted) {
         when (event.type) {
-            CommuteEventType.ARRIVE -> pendingArriveAt = event.timestamp
+            CommuteEventType.ARRIVE -> {
+                // Two ARRIVEs with no LEAVE between them: close the earlier one instead of
+                // discarding it. Dropping it silently zeroed a real in-progress day the moment
+                // the user added a future-dated record.
+                pendingArriveAt?.let {
+                    closeSession(it, openSessionEnd(it), stillOpen = false, awaySpans = allAwaySpans)
+                }
+                pendingArriveAt = event.timestamp
+            }
             CommuteEventType.LEAVE -> {
                 val arriveAt = pendingArriveAt ?: continue
                 pendingArriveAt = null
@@ -119,7 +137,10 @@ fun computeDailyWorkStats(
             CommuteEventType.AWAY -> Unit
         }
     }
-    pendingArriveAt?.let { closeSession(it, nowMillis, stillOpen = true, awaySpans = allAwaySpans) }
+    pendingArriveAt?.let {
+        val end = openSessionEnd(it)
+        closeSession(it, end, stillOpen = end >= nowMillis, awaySpans = allAwaySpans)
+    }
 
     return byDay.entries.map { (day, acc) ->
         DailyWorkStat(day, acc.minutes, acc.rawMinutes, acc.firstArrive, acc.lastLeave, acc.open)
