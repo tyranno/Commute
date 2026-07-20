@@ -3,6 +3,7 @@ package com.commute.app.wifi
 import android.content.Context
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 
 /** Strips surrounding quotes Android puts around SSIDs and filters out the "unknown" placeholder. */
 private fun WifiInfo?.cleanSsid(): String? {
@@ -50,21 +51,70 @@ fun currentWifiSsid(context: Context): String? {
  * ~1-minute 자리비움 while the phone never left the office. A real connection is always at least
  * as strong a presence signal as a scan hit, so this only ever adds true positives.
  */
-@Suppress("DEPRECATION")
-fun isCompanyWifiNearby(context: Context, companySsid: String, companyBssids: Set<String>): Boolean {
-    val wifiManager = context.applicationContext
-        .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return false
+fun isCompanyWifiNearby(context: Context, companySsid: String, companyBssids: Set<String>): Boolean =
+    detectCompanyWifi(context, companySsid, companyBssids).nearby
 
-    if (companyBssids.isEmpty()) {
-        if (wifiManager.connectionInfo.cleanSsid() == companySsid) return true
-        return wifiManager.scanResults.any { result -> result.SSID?.trim('"') == companySsid }
-    }
+/**
+ * Outcome of one presence check.
+ *
+ * [observedAt] is wall-clock millis for when the OS actually saw the company AP, which is not the
+ * same as when we asked. Our poll only runs when the device happens to be awake, while the system's
+ * own Wi-Fi scanning keeps running and stamps each result — so on a phone that dozed through the
+ * walk into the office, the scan cache already knows the AP appeared several minutes before the
+ * poll that reads it. Null when there's no usable stamp (matched via the live connection, or the
+ * platform reported a nonsense timestamp), meaning "as of now".
+ */
+data class CompanyWifiDetection(val nearby: Boolean, val observedAt: Long?)
+
+/**
+ * [isCompanyWifiNearby]'s answer plus *when* the evidence for it was captured — see
+ * [CompanyWifiDetection.observedAt]. A live connection is reported with a null stamp rather than a
+ * backdated one: being associated says nothing about when association began.
+ *
+ * The stamp is the earliest of the matching scan results. Each cached result carries the time of
+ * the last scan that saw that BSSID, so with several office APs the earliest is the first moment
+ * any of them came into view — which is the moment the person arrived. Using the freshest instead
+ * would throw away exactly the delay this exists to recover.
+ */
+@Suppress("DEPRECATION")
+fun detectCompanyWifi(
+    context: Context,
+    companySsid: String,
+    companyBssids: Set<String>
+): CompanyWifiDetection {
+    val wifiManager = context.applicationContext
+        .getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        ?: return CompanyWifiDetection(nearby = false, observedAt = null)
 
     val connection = wifiManager.connectionInfo
-    if (connection.cleanSsid() == companySsid && connection?.bssid?.normalizeBssid() in companyBssids) return true
-    return wifiManager.scanResults.any { result ->
-        result.SSID?.trim('"') == companySsid && result.BSSID?.normalizeBssid() in companyBssids
+    val connectionMatches = connection.cleanSsid() == companySsid &&
+        (companyBssids.isEmpty() || connection?.bssid?.normalizeBssid() in companyBssids)
+    if (connectionMatches) return CompanyWifiDetection(nearby = true, observedAt = null)
+
+    val matches = wifiManager.scanResults.filter { result ->
+        result.SSID?.trim('"') == companySsid &&
+            (companyBssids.isEmpty() || result.BSSID?.normalizeBssid() in companyBssids)
     }
+    if (matches.isEmpty()) return CompanyWifiDetection(nearby = false, observedAt = null)
+
+    val observedAt = matches.mapNotNull { it.wallClockSeenAt() }.minOrNull()
+    return CompanyWifiDetection(nearby = true, observedAt = observedAt)
+}
+
+/**
+ * Converts a [android.net.wifi.ScanResult.timestamp] — microseconds on the elapsed-realtime clock,
+ * not a wall-clock value — into wall-clock millis, by anchoring both clocks in the same breath.
+ *
+ * Returns null for a stamp that can't be true: zero/negative (some drivers just don't fill it in)
+ * or one claiming a scan from after the current boot's uptime. A wrong stamp here would silently
+ * backdate an 출근, so anything suspect is dropped in favour of "as of now".
+ */
+@Suppress("DEPRECATION")
+private fun android.net.wifi.ScanResult.wallClockSeenAt(): Long? {
+    val elapsedNow = SystemClock.elapsedRealtime()
+    val seenElapsedMs = timestamp / 1000
+    if (seenElapsedMs <= 0 || seenElapsedMs > elapsedNow) return null
+    return System.currentTimeMillis() - (elapsedNow - seenElapsedMs)
 }
 
 /** BSSIDs are compared case-insensitively — the OS isn't consistent about the hex case it

@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Restaurant
@@ -64,6 +65,8 @@ fun SettingsScreen(
     val companySsid by viewModel.companySsid.collectAsState()
     val companyBssids by viewModel.companyBssids.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
+    val autoLeaveAfterAwayMinutes by viewModel.autoLeaveAfterAwayMinutes.collectAsState()
+    val workEndMinute by viewModel.workEndMinute.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
     val showWeekend by viewModel.showWeekend.collectAsState()
@@ -133,6 +136,18 @@ fun SettingsScreen(
                 AbsenceThresholdEditor(
                     minutes = absenceThresholdMinutes,
                     onSave = viewModel::setAbsenceThresholdMinutes
+                )
+            }
+
+            RuleCard(
+                icon = Icons.AutoMirrored.Filled.Logout,
+                title = "자동 퇴근 처리"
+            ) {
+                AutoLeaveEditor(
+                    afterAwayMinutes = autoLeaveAfterAwayMinutes,
+                    workEndMinute = workEndMinute,
+                    onSaveAfterAwayMinutes = viewModel::setAutoLeaveAfterAwayMinutes,
+                    onSaveWorkEndMinute = viewModel::setWorkEndMinute
                 )
             }
 
@@ -234,9 +249,20 @@ private fun formatThresholdLabel(minutes: Int): String {
 /** A fixed set of choices tapped and saved immediately (no free-text, no debounce) — picking one
  * is always a complete, valid value, so there's no "still mid-edit" state that a debounced
  * auto-save could flush too early or lose if the app is closed before the delay elapses. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
+    MinutesDropdown(
+        label = "자리비움 인정 기준",
+        minutes = minutes,
+        options = ABSENCE_THRESHOLD_OPTIONS_MINUTES.toList(),
+        onSave = onSave
+    )
+}
+
+/** Shared duration picker for the rule cards — a read-only field opening a fixed option list. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MinutesDropdown(label: String, minutes: Int, options: List<Int>, onSave: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -247,14 +273,14 @@ private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
             value = formatThresholdLabel(minutes),
             onValueChange = {},
             readOnly = true,
-            label = { Text("자리비움 인정 기준") },
+            label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            ABSENCE_THRESHOLD_OPTIONS_MINUTES.forEach { option ->
+            options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(formatThresholdLabel(option)) },
                     onClick = {
@@ -264,6 +290,60 @@ private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/** Whole hours only: this is "how long before we're sure they went home", a judgement call where
+ * 3시간 vs 3시간 30분 is a distinction without a difference. Capped at 6시간 because a longer wait
+ * would routinely be pre-empted by the 근무 인정 시간 종료 rule anyway. */
+private val AUTO_LEAVE_OPTIONS_MINUTES = (1..6).map { it * 60 }
+
+/** The two ways a 자리비움 turns into a 퇴근 — whichever comes first. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutoLeaveEditor(
+    afterAwayMinutes: Int,
+    workEndMinute: Int,
+    onSaveAfterAwayMinutes: (Int) -> Unit,
+    onSaveWorkEndMinute: (Int) -> Unit
+) {
+    var showEndPicker by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "자리비움이 아래 기준에 닿으면 퇴근으로 확정합니다. 퇴근 시각은 자리비움이 시작된 시각으로 기록되고, 그 전에 회사 와이파이가 다시 잡히면 자리비움으로 끝납니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        MinutesDropdown(
+            label = "자리비움 지속 시간",
+            minutes = afterAwayMinutes,
+            options = AUTO_LEAVE_OPTIONS_MINUTES,
+            onSave = onSaveAfterAwayMinutes
+        )
+        PickerField(
+            label = "근무 인정 시간 종료",
+            value = formatMinuteOfDayToHHmm(workEndMinute),
+            icon = Icons.Filled.AccessTime,
+            onClick = { showEndPicker = true },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+
+    if (showEndPicker) {
+        val state = rememberTimePickerState(
+            initialHour = workEndMinute / 60,
+            initialMinute = workEndMinute % 60,
+            is24Hour = true
+        )
+        TimePickerDialog(
+            title = "근무 인정 시간 종료",
+            onDismiss = { showEndPicker = false },
+            onConfirm = {
+                onSaveWorkEndMinute(state.hour * 60 + state.minute)
+                showEndPicker = false
+            }
+        ) { TimePicker(state = state) }
     }
 }
 

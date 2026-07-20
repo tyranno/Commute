@@ -21,6 +21,8 @@ data class BackupSettings(
     val companyBssids: Set<String>,
     val monitoringEnabled: Boolean,
     val absenceThresholdMinutes: Int,
+    val autoLeaveAfterAwayMinutes: Int,
+    val workEndMinute: Int,
     val lunchStartMinute: Int,
     val lunchEndMinute: Int,
     val showWeekend: Boolean
@@ -43,6 +45,8 @@ fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, export
             put("companyBssids", JSONArray().apply { settings.companyBssids.forEach { put(it) } })
             put("monitoringEnabled", settings.monitoringEnabled)
             put("absenceThresholdMinutes", settings.absenceThresholdMinutes)
+            put("autoLeaveAfterAwayMinutes", settings.autoLeaveAfterAwayMinutes)
+            put("workEndMinute", settings.workEndMinute)
             put("lunchStartMinute", settings.lunchStartMinute)
             put("lunchEndMinute", settings.lunchEndMinute)
             put("showWeekend", settings.showWeekend)
@@ -84,6 +88,11 @@ fun parseBackupJson(json: String): ParsedBackup {
             "absenceThresholdMinutes",
             SettingsRepository.DEFAULT_ABSENCE_THRESHOLD_MINUTES
         ),
+        autoLeaveAfterAwayMinutes = settingsJson.optInt(
+            "autoLeaveAfterAwayMinutes",
+            SettingsRepository.DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES
+        ),
+        workEndMinute = settingsJson.optInt("workEndMinute", SettingsRepository.DEFAULT_WORK_END_MINUTE),
         lunchStartMinute = settingsJson.optInt("lunchStartMinute", SettingsRepository.DEFAULT_LUNCH_START_MINUTE),
         lunchEndMinute = settingsJson.optInt("lunchEndMinute", SettingsRepository.DEFAULT_LUNCH_END_MINUTE),
         showWeekend = settingsJson.optBoolean("showWeekend", false)

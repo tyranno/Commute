@@ -24,6 +24,8 @@ class SettingsRepository(private val context: Context) {
         val AWAY_SINCE_AT = longPreferencesKey("away_since_at")
         val PROVISIONAL_AWAY_SINCE_AT = longPreferencesKey("provisional_away_since_at")
         val ABSENCE_THRESHOLD_MINUTES = intPreferencesKey("absence_threshold_minutes")
+        val AUTO_LEAVE_AFTER_AWAY_MINUTES = intPreferencesKey("auto_leave_after_away_minutes")
+        val WORK_END_MINUTE = intPreferencesKey("work_end_minute")
         val LUNCH_START_MINUTE = intPreferencesKey("lunch_start_minute")
         val LUNCH_END_MINUTE = intPreferencesKey("lunch_end_minute")
         val SHOW_WEEKEND = booleanPreferencesKey("show_weekend")
@@ -51,6 +53,20 @@ class SettingsRepository(private val context: Context) {
     /** 자리비움 인정 기준(분) — 가산 연구소 운영 방안 기본값 10분. 이 미만의 단절은 퇴근이 아니라 자리비움으로 처리. */
     val absenceThresholdMinutes: Flow<Int> = context.dataStore.data.map {
         it[Keys.ABSENCE_THRESHOLD_MINUTES] ?: DEFAULT_ABSENCE_THRESHOLD_MINUTES
+    }
+
+    /** 자리비움이 이만큼 이어지면 자리비움이 아니라 퇴근으로 확정(기본 3시간). 퇴근 시각은 지금이
+     * 아니라 *자리비움이 시작된 시각* — 회사를 떠난 건 자리를 비운 그 순간이기 때문. 이 시간이 지나기
+     * 전에 회사 와이파이가 다시 잡히면 그냥 자리비움으로 끝나고 세션은 계속된다. */
+    val autoLeaveAfterAwayMinutes: Flow<Int> = context.dataStore.data.map {
+        it[Keys.AUTO_LEAVE_AFTER_AWAY_MINUTES] ?: DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES
+    }
+
+    /** 근무 인정 시간의 끝(자정 기준 분, 가산 연구소 운영 방안 기준 22:00). 이 시각을 넘긴 자리비움은
+     * [autoLeaveAfterAwayMinutes]를 채우지 않았더라도 퇴근으로 확정한다 — 22시 이후는 어차피 근무로
+     * 인정되지 않으므로 더 기다릴 이유가 없다. */
+    val workEndMinute: Flow<Int> = context.dataStore.data.map {
+        it[Keys.WORK_END_MINUTE] ?: DEFAULT_WORK_END_MINUTE
     }
 
     /** 점심시간 시작(자정 기준 분, 기본 11:20~12:20). 이 구간 동안의 단절은 자리비움 인정 기준과 무관하게 퇴근으로 마감하지 않음. */
@@ -120,6 +136,14 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.ABSENCE_THRESHOLD_MINUTES] = minutes }
     }
 
+    suspend fun setAutoLeaveAfterAwayMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.AUTO_LEAVE_AFTER_AWAY_MINUTES] = minutes }
+    }
+
+    suspend fun setWorkEndMinute(minuteOfDay: Int) {
+        context.dataStore.edit { it[Keys.WORK_END_MINUTE] = minuteOfDay }
+    }
+
     suspend fun setLunchWindow(startMinute: Int, endMinute: Int) {
         context.dataStore.edit {
             it[Keys.LUNCH_START_MINUTE] = startMinute
@@ -133,6 +157,8 @@ class SettingsRepository(private val context: Context) {
 
     companion object {
         const val DEFAULT_ABSENCE_THRESHOLD_MINUTES = 10
+        const val DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES = 3 * 60 // 3시간
+        const val DEFAULT_WORK_END_MINUTE = 22 * 60 // 22:00 — 근무 인정 시간 상한
         const val DEFAULT_LUNCH_START_MINUTE = 11 * 60 + 20 // 11:20 — 실제 운영 중인 점심시간 기준
         const val DEFAULT_LUNCH_END_MINUTE = 12 * 60 + 20 // 12:20
     }

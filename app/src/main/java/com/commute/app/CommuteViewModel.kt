@@ -67,6 +67,16 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
             SettingsRepository.DEFAULT_ABSENCE_THRESHOLD_MINUTES
         )
 
+    val autoLeaveAfterAwayMinutes: StateFlow<Int> = settingsRepository.autoLeaveAfterAwayMinutes
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES
+        )
+
+    val workEndMinute: StateFlow<Int> = settingsRepository.workEndMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_WORK_END_MINUTE)
+
     val lunchStartMinute: StateFlow<Int> = settingsRepository.lunchStartMinute
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_LUNCH_START_MINUTE)
 
@@ -172,6 +182,14 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepository.setAbsenceThresholdMinutes(minutes) }
     }
 
+    fun setAutoLeaveAfterAwayMinutes(minutes: Int) {
+        viewModelScope.launch { settingsRepository.setAutoLeaveAfterAwayMinutes(minutes) }
+    }
+
+    fun setWorkEndMinute(minuteOfDay: Int) {
+        viewModelScope.launch { settingsRepository.setWorkEndMinute(minuteOfDay) }
+    }
+
     fun setLunchWindow(startMinute: Int, endMinute: Int) {
         viewModelScope.launch { settingsRepository.setLunchWindow(startMinute, endMinute) }
     }
@@ -211,6 +229,8 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                     companyBssids = settingsRepository.companyBssids.first(),
                     monitoringEnabled = settingsRepository.monitoringEnabled.first(),
                     absenceThresholdMinutes = settingsRepository.absenceThresholdMinutes.first(),
+                    autoLeaveAfterAwayMinutes = settingsRepository.autoLeaveAfterAwayMinutes.first(),
+                    workEndMinute = settingsRepository.workEndMinute.first(),
                     lunchStartMinute = settingsRepository.lunchStartMinute.first(),
                     lunchEndMinute = settingsRepository.lunchEndMinute.first(),
                     showWeekend = settingsRepository.showWeekend.first()
@@ -250,6 +270,8 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 parsed.settings.companySsid?.let { settingsRepository.setCompanySsid(it) }
                 settingsRepository.setCompanyBssids(parsed.settings.companyBssids)
                 settingsRepository.setAbsenceThresholdMinutes(parsed.settings.absenceThresholdMinutes)
+                settingsRepository.setAutoLeaveAfterAwayMinutes(parsed.settings.autoLeaveAfterAwayMinutes)
+                settingsRepository.setWorkEndMinute(parsed.settings.workEndMinute)
                 settingsRepository.setLunchWindow(parsed.settings.lunchStartMinute, parsed.settings.lunchEndMinute)
                 settingsRepository.setShowWeekend(parsed.settings.showWeekend)
                 setMonitoringEnabled(parsed.settings.monitoringEnabled)
