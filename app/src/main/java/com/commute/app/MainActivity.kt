@@ -31,6 +31,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothConnected
+import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
@@ -77,6 +80,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.commute.app.ble.detectCompanyBeacon
+import com.commute.app.ble.hasBleScanPermission
 import com.commute.app.data.isWithinMinuteOfDayWindow
 import com.commute.app.ui.theme.CommuteTheme
 import com.commute.app.wifi.WifiMonitorService
@@ -132,6 +137,8 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val context = LocalContext.current
     val companySsid by viewModel.companySsid.collectAsState()
     val companyBssids by viewModel.companyBssids.collectAsState()
+    val bleEnabled by viewModel.bleEnabled.collectAsState()
+    val companyBeaconId by viewModel.companyBeaconId.collectAsState()
     val monitoringEnabled by viewModel.monitoringEnabled.collectAsState()
     val isAtWork by viewModel.isAtWork.collectAsState()
     val awaySinceAt by viewModel.awaySinceAt.collectAsState()
@@ -197,6 +204,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
 
     var currentSsid by remember { mutableStateOf<String?>(null) }
     var companyWifiDetectedNow by remember { mutableStateOf(false) }
+    var companyBeaconDetectedNow by remember { mutableStateOf(false) }
     var locationServicesEnabled by remember { mutableStateOf(true) }
     var isLunchTimeNow by remember { mutableStateOf(false) }
     // "Now" has to be state, not a bare System.currentTimeMillis() read inside the card: the
@@ -211,7 +219,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     // background — which Android 12+ rejects outright and 14+ rejects for a while-in-use service
     // type, crashing the app precisely when the watchdog was supposed to save it. Suspending
     // while invisible also drops the pointless background binder traffic.
-    LaunchedEffect(hasLocationPermission, companySsid, companyBssids, lunchStartMinute, lunchEndMinute) {
+    LaunchedEffect(hasLocationPermission, companySsid, companyBssids, bleEnabled, companyBeaconId, lunchStartMinute, lunchEndMinute) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
@@ -220,6 +228,19 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 val registeredSsid = companySsid
                 companyWifiDetectedNow = hasLocationPermission && registeredSsid != null &&
                     isCompanyWifiNearby(context, registeredSsid, companyBssids)
+                // BLE presence mirrors the Wi-Fi live poll, gated on the beacon being registered
+                // and enabled. detectCompanyBeacon() is a bounded (~6s) active scan that already
+                // returns "not nearby" when the permission is missing or Bluetooth is off, so no
+                // extra guard is needed beyond skipping it entirely when BLE isn't in use. This is
+                // the same OR-with-Wi-Fi presence the background service records via mergePresence,
+                // so the card agrees with the service even when only the beacon can see the office.
+                val beaconToken = companyBeaconId
+                companyBeaconDetectedNow = if (bleEnabled && !beaconToken.isNullOrBlank() &&
+                    hasBleScanPermission(context)) {
+                    detectCompanyBeacon(context, beaconToken).nearby
+                } else {
+                    false
+                }
                 locationServicesEnabled = locationManager == null ||
                     LocationManagerCompat.isLocationEnabled(locationManager)
                 isLunchTimeNow = isWithinMinuteOfDayWindow(nowTick, lunchStartMinute, lunchEndMinute)
@@ -311,6 +332,8 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 CompactStatusCard(
                     isAtWork = isAtWork,
                     companyWifiDetectedNow = companyWifiDetectedNow,
+                    bleEnabled = bleEnabled,
+                    companyBeaconDetectedNow = companyBeaconDetectedNow,
                     awaySinceAt = awaySinceAt,
                     absenceThresholdMinutes = absenceThresholdMinutes,
                     nowMillis = nowTick,
@@ -421,6 +444,8 @@ private fun commuteStatus(
 private fun CompactStatusCard(
     isAtWork: Boolean,
     companyWifiDetectedNow: Boolean,
+    bleEnabled: Boolean,
+    companyBeaconDetectedNow: Boolean,
     awaySinceAt: Long?,
     absenceThresholdMinutes: Int,
     nowMillis: Long,
@@ -433,7 +458,12 @@ private fun CompactStatusCard(
     onOpenWifiSearch: () -> Unit,
     onMonitoringChange: (Boolean) -> Unit
 ) {
-    val status = commuteStatus(isAtWork, companyWifiDetectedNow, awaySinceAt, absenceThresholdMinutes, nowMillis)
+    // Presence is OR'd across Wi-Fi and BLE, matching the background service's mergePresence, so
+    // the card reads 근무중/출근 인식됨 when *either* radio sees the office — e.g. Wi-Fi off but at
+    // your desk by the beacon. BLE only counts when the user has actually enabled it.
+    val beaconDetectedNow = bleEnabled && companyBeaconDetectedNow
+    val detectedNow = companyWifiDetectedNow || beaconDetectedNow
+    val status = commuteStatus(isAtWork, detectedNow, awaySinceAt, absenceThresholdMinutes, nowMillis)
     val containerColor = when (status) {
         CommuteStatus.WORKING -> MaterialTheme.colorScheme.primaryContainer
         CommuteStatus.ARRIVAL_DETECTED, CommuteStatus.AWAY -> MaterialTheme.colorScheme.tertiaryContainer
@@ -447,7 +477,7 @@ private fun CompactStatusCard(
     val statusIcon = when (status) {
         CommuteStatus.WORKING -> Icons.Filled.Work
         CommuteStatus.AWAY -> Icons.AutoMirrored.Filled.DirectionsWalk
-        CommuteStatus.ARRIVAL_DETECTED -> Icons.Filled.Wifi
+        CommuteStatus.ARRIVAL_DETECTED -> if (companyWifiDetectedNow) Icons.Filled.Wifi else Icons.Filled.Bluetooth
         CommuteStatus.LEFT -> Icons.AutoMirrored.Filled.ExitToApp
     }
     Card(
@@ -476,6 +506,24 @@ private fun CompactStatusCard(
                         companySsid?.let { "회사 와이파이: $it" } ?: "회사 와이파이 미등록",
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor
+                    )
+                    if (bleEnabled) {
+                        Text(
+                            "회사 비콘: ${if (companyBeaconDetectedNow) "감지됨" else "미감지"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = contentColor
+                        )
+                    }
+                }
+                // Live BLE presence indicator, shown only when the beacon is in use. Purely a
+                // status glyph (not clickable): the beacon is registered on the settings screen,
+                // unlike Wi-Fi which is registered from this card.
+                if (bleEnabled) {
+                    Icon(
+                        imageVector = if (companyBeaconDetectedNow) Icons.Filled.BluetoothConnected
+                            else Icons.Filled.BluetoothDisabled,
+                        contentDescription = if (companyBeaconDetectedNow) "회사 비콘 감지됨" else "회사 비콘 미감지",
+                        tint = contentColor
                     )
                 }
                 IconButton(onClick = onOpenWifiSearch) {
