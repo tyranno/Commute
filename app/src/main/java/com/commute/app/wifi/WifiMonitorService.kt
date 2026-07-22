@@ -10,9 +10,13 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
+import com.commute.app.ble.CompanyBeaconDetection
+import com.commute.app.ble.detectCompanyBeacon
+import com.commute.app.ble.mergePresence
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
+import com.commute.app.data.RecoveryJournal
 import com.commute.app.data.SettingsRepository
 import com.commute.app.data.timestampAtMinuteOfDay
 import java.text.SimpleDateFormat
@@ -148,11 +152,13 @@ class WifiMonitorService : Service() {
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
     private lateinit var settingsRepository: SettingsRepository
+    private lateinit var recoveryJournal: RecoveryJournal
     private var monitorJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         settingsRepository = SettingsRepository(applicationContext)
+        recoveryJournal = RecoveryJournal(applicationContext)
         ensureNotificationChannels(applicationContext)
     }
 
@@ -211,10 +217,35 @@ class WifiMonitorService : Service() {
     private suspend fun checkWifiState() {
         stateMutex.withLock {
             val companySsid = settingsRepository.companySsid.first()
-            if (companySsid.isNullOrBlank()) return@withLock
+            val bleEnabled = settingsRepository.bleEnabled.first()
+            val beaconId = settingsRepository.companyBeaconId.first()
+            val wifiRegistered = !companySsid.isNullOrBlank()
+            val bleRegistered = bleEnabled && !beaconId.isNullOrBlank()
+            // Nothing to detect against — neither the Wi-Fi nor the beacon is registered.
+            if (!wifiRegistered && !bleRegistered) return@withLock
+
+            // The label stored on each event (and shown in notifications). Prefer the Wi-Fi name
+            // for continuity with existing records; fall back to the beacon token for a BLE-only setup.
+            val presenceLabel = companySsid?.takeUnless { it.isBlank() } ?: beaconId ?: "회사"
 
             val companyBssids = settingsRepository.companyBssids.first()
-            val detection = detectCompanyWifi(applicationContext, companySsid, companyBssids)
+            val wifiDetection = if (wifiRegistered) {
+                detectCompanyWifi(applicationContext, companySsid!!, companyBssids)
+            } else {
+                CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
+            }
+            // BLE runs *in parallel* as a backup: either signal seeing the office counts as present,
+            // so the poll only reads "away" when both are gone — which is what covers someone who
+            // keeps Wi-Fi off (LTE only) but sits by the beacon. Skipped when Wi-Fi already sees the
+            // office, since presence is settled either way and a live BLE scan (no OS-cached results,
+            // so it has to listen for a few seconds every poll) is pure battery cost once redundant.
+            // When it does run it's safe under the alarm poll's 30s wakelock.
+            val bleDetection = if (bleRegistered && !wifiDetection.nearby) {
+                detectCompanyBeacon(applicationContext, beaconId!!)
+            } else {
+                CompanyBeaconDetection(nearby = false, observedAt = null, lastObservedAt = null)
+            }
+            val detection = mergePresence(wifiDetection, bleDetection)
             val companyWifiNearby = detection.nearby
             var wasAtWork = settingsRepository.isAtWork.first()
             val now = System.currentTimeMillis()
@@ -253,7 +284,7 @@ class WifiMonitorService : Service() {
                         settingsRepository.leaveMarginMinutes.first(),
                         latestEventTimestamp()
                     )
-                    recordEvent(CommuteEventType.LEAVE, companySsid, leftAt)
+                    recordEvent(CommuteEventType.LEAVE, presenceLabel, leftAt)
                     showEventNotification(
                         applicationContext,
                         "퇴근 기록됨",
@@ -288,11 +319,11 @@ class WifiMonitorService : Service() {
                     // [arriveTimestamp].
                     val arrivedAt = arriveTimestamp(detection.observedAt, now, latestEventTimestamp())
                     settingsRepository.setIsAtWork(true)
-                    recordEvent(CommuteEventType.ARRIVE, companySsid, arrivedAt)
+                    recordEvent(CommuteEventType.ARRIVE, presenceLabel, arrivedAt)
                     showEventNotification(
                         applicationContext,
                         "출근 기록됨",
-                        "회사 와이파이($companySsid) 감지 ${timeFormat.format(Date(arrivedAt))}"
+                        "회사($presenceLabel) 감지 ${timeFormat.format(Date(arrivedAt))}"
                     )
                 } else {
                     // Reconnected while still "at work": the session itself never ends here, but
@@ -308,7 +339,7 @@ class WifiMonitorService : Service() {
                         // same AWAY on every following poll.
                         settingsRepository.clearAwaySinceAt()
                         if (now - awaySince >= thresholdMs) {
-                            recordEvent(CommuteEventType.AWAY, companySsid, awaySince, endTimestamp = now)
+                            recordEvent(CommuteEventType.AWAY, presenceLabel, awaySince, endTimestamp = now)
                             showEventNotification(
                                 applicationContext,
                                 "자리비움 종료",
@@ -372,7 +403,7 @@ class WifiMonitorService : Service() {
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
-                    recordEvent(CommuteEventType.LEAVE, companySsid, leftAt)
+                    recordEvent(CommuteEventType.LEAVE, presenceLabel, leftAt)
                     showEventNotification(
                         applicationContext,
                         "퇴근 기록됨",
@@ -438,9 +469,10 @@ class WifiMonitorService : Service() {
         timestamp: Long,
         endTimestamp: Long? = null
     ) {
-        CommuteDatabase.getInstance(applicationContext).commuteDao().insert(
-            CommuteEvent(type = type, ssid = ssid, timestamp = timestamp, endTimestamp = endTimestamp)
-        )
+        val event = CommuteEvent(type = type, ssid = ssid, timestamp = timestamp, endTimestamp = endTimestamp)
+        val id = CommuteDatabase.getInstance(applicationContext).commuteDao().insert(event)
+        // Mirror to the crash-independent journal so this record survives a later DB wipe.
+        recoveryJournal.append(event.copy(id = id))
     }
 
     /**

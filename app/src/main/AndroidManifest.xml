@@ -7,6 +7,14 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- The monitor also scans for the office BLE beacon; connectedDevice is the FGS type that
+         covers Bluetooth interaction. Normal permission, no prompt. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- BLE beacon detection. BLUETOOTH_SCAN is the runtime permission on Android 12+; the older
+         BLUETOOTH/BLUETOOTH_ADMIN cover pre-12, where a scan otherwise rides on location. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Held only for the few hundred ms of an alarm-driven poll, so the device can't suspend
@@ -34,7 +42,7 @@
         <service
             android:name=".wifi.WifiMonitorService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|connectedDevice" />
 
         <receiver
             android:name=".wifi.BootReceiver"

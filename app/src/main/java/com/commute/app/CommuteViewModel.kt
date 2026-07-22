@@ -11,6 +11,7 @@ import com.commute.app.data.CommuteEvent
 import com.commute.app.data.DailyWorkStat
 import com.commute.app.data.SettingsRepository
 import com.commute.app.data.MissingRecordFlag
+import com.commute.app.data.RecoveryJournal
 import com.commute.app.data.buildBackupJson
 import com.commute.app.data.computeDailyWorkStats
 import com.commute.app.data.findMissingRecords
@@ -38,11 +39,30 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     private val settingsRepository = SettingsRepository(application)
     private val dao = CommuteDatabase.getInstance(application).commuteDao()
 
+    /** Append-only, DB-independent mirror of every event — the safety net that lets a wiped or
+     * partially-lost history be rebuilt (see [RecoveryJournal] and [recoverFromJournal]). */
+    private val recoveryJournal = RecoveryJournal(application)
+
+    init {
+        // Seed the journal from whatever the DB already holds (first run after this feature ships,
+        // or after a direct DB edit) so existing history is protected too, not just events
+        // recorded from here on. Additive — never removes anything.
+        viewModelScope.launch(Dispatchers.IO) {
+            recoveryJournal.reconcile(dao.getAllOnce())
+        }
+    }
+
     val companySsid: StateFlow<String?> = settingsRepository.companySsid
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val companyBssids: StateFlow<Set<String>> = settingsRepository.companyBssids
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    val bleEnabled: StateFlow<Boolean> = settingsRepository.bleEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val companyBeaconId: StateFlow<String?> = settingsRepository.companyBeaconId
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val monitoringEnabled: StateFlow<Boolean> = settingsRepository.monitoringEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
@@ -59,6 +79,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     val events: StateFlow<List<CommuteEvent>> = dao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** How many events sit in the recovery journal but are missing from the live DB — records a
+     * wipe or partial loss dropped that [recoverFromJournal] can restore. 0 in normal operation;
+     * re-derived whenever the DB changes (a recovery drops it back to 0). */
+    val recoverableCount: StateFlow<Int> = events
+        .map { current -> withContext(Dispatchers.IO) { recoveryJournal.readMissing(current).size } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val absenceThresholdMinutes: StateFlow<Int> = settingsRepository.absenceThresholdMinutes
         .stateIn(
@@ -179,6 +206,22 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Turns parallel BLE beacon detection on or off. Independent of Wi-Fi — both can run at once,
+     * and monitoring keeps working on Wi-Fi alone if this is left off. */
+    fun setBleEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setBleEnabled(enabled) }
+    }
+
+    /** Registers [token] (a beacon's manufacturer payload, e.g. "COMMUTE1") as the office beacon.
+     * The MAC isn't stored — it rotates — so this token is the whole identity. */
+    fun registerCompanyBeacon(token: String) {
+        viewModelScope.launch { settingsRepository.setCompanyBeaconId(token) }
+    }
+
+    fun clearCompanyBeacon() {
+        viewModelScope.launch { settingsRepository.clearCompanyBeaconId() }
+    }
+
     fun setMonitoringEnabled(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setMonitoringEnabled(enabled) }
         val app = getApplication<Application>()
@@ -211,16 +254,45 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     /** Fills in a record the service missed (e.g. wifi/permission hiccup, phone off). */
     fun addEvent(event: CommuteEvent) {
-        viewModelScope.launch { dao.insert(event) }
+        viewModelScope.launch {
+            val id = dao.insert(event)
+            recoveryJournal.append(event.copy(id = id))
+        }
     }
 
     /** Corrects a misdetected record (wrong type or time) after the fact. */
     fun updateEvent(event: CommuteEvent) {
-        viewModelScope.launch { dao.update(event) }
+        viewModelScope.launch {
+            dao.update(event)
+            // Drop the pre-edit line, then log the corrected one, so the old timestamp doesn't
+            // linger in the journal as a phantom "recoverable" record.
+            recoveryJournal.remove(event)
+            recoveryJournal.append(event)
+        }
     }
 
     fun deleteEvent(event: CommuteEvent) {
-        viewModelScope.launch { dao.delete(event) }
+        viewModelScope.launch {
+            dao.delete(event)
+            // A deliberate delete removes it from the journal too, so recovery won't resurrect it.
+            recoveryJournal.remove(event)
+        }
+    }
+
+    /** Re-inserts every event the recovery journal still holds but the DB has lost (matched by
+     * type+timestamp), rebuilding a wiped or partial history without touching what's already
+     * there. No-op when nothing is missing. See [RecoveryJournal]. */
+    fun recoverFromJournal() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            val restored = withContext(Dispatchers.IO) {
+                val missing = recoveryJournal.readMissing(dao.getAllOnce())
+                missing.forEach { dao.insert(it) }
+                missing.size
+            }
+            val msg = if (restored > 0) "로그에서 ${restored}건 복구됨" else "복구할 기록이 없습니다"
+            Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** Writes every recorded event plus the durable settings to [uri] as JSON — since it's
@@ -238,6 +310,8 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 val settings = BackupSettings(
                     companySsid = settingsRepository.companySsid.first(),
                     companyBssids = settingsRepository.companyBssids.first(),
+                    bleEnabled = settingsRepository.bleEnabled.first(),
+                    companyBeaconId = settingsRepository.companyBeaconId.first(),
                     monitoringEnabled = settingsRepository.monitoringEnabled.first(),
                     absenceThresholdMinutes = settingsRepository.absenceThresholdMinutes.first(),
                     autoLeaveAfterAwayMinutes = settingsRepository.autoLeaveAfterAwayMinutes.first(),
@@ -278,9 +352,14 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                     parseBackupJson(json)
                 }
                 dao.replaceAll(parsed.events)
+                // Fold the restored events into the journal (additive) so they're protected going
+                // forward too, without dropping journal entries the backup happened to omit.
+                withContext(Dispatchers.IO) { recoveryJournal.reconcile(dao.getAllOnce()) }
                 settingsRepository.clearSessionState()
                 parsed.settings.companySsid?.let { settingsRepository.setCompanySsid(it) }
                 settingsRepository.setCompanyBssids(parsed.settings.companyBssids)
+                settingsRepository.setBleEnabled(parsed.settings.bleEnabled)
+                parsed.settings.companyBeaconId?.let { settingsRepository.setCompanyBeaconId(it) }
                 settingsRepository.setAbsenceThresholdMinutes(parsed.settings.absenceThresholdMinutes)
                 settingsRepository.setAutoLeaveAfterAwayMinutes(parsed.settings.autoLeaveAfterAwayMinutes)
                 settingsRepository.setLeaveMarginMinutes(parsed.settings.leaveMarginMinutes)

@@ -2,12 +2,17 @@ package com.commute.app
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,13 +20,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Weekend
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -40,6 +48,7 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,8 +57,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.commute.app.ble.hasBleScanPermission
+import com.commute.app.ble.isBluetoothOn
+import com.commute.app.ble.requiredBleScanPermissions
+import com.commute.app.ble.scanNearbyBeacons
 import com.commute.app.data.formatMinuteOfDayToHHmm
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -64,6 +78,8 @@ fun SettingsScreen(
 ) {
     val companySsid by viewModel.companySsid.collectAsState()
     val companyBssids by viewModel.companyBssids.collectAsState()
+    val bleEnabled by viewModel.bleEnabled.collectAsState()
+    val companyBeaconId by viewModel.companyBeaconId.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val autoLeaveAfterAwayMinutes by viewModel.autoLeaveAfterAwayMinutes.collectAsState()
     val leaveMarginMinutes by viewModel.leaveMarginMinutes.collectAsState()
@@ -71,6 +87,7 @@ fun SettingsScreen(
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
     val showWeekend by viewModel.showWeekend.collectAsState()
+    val recoverableCount by viewModel.recoverableCount.collectAsState()
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let(viewModel::exportBackup)
@@ -128,6 +145,19 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("지금 보이는 ${companySsid ?: "회사"} AP 등록") }
                 }
+            }
+
+            RuleCard(
+                icon = Icons.Filled.Bluetooth,
+                title = "회사 비콘(BLE) 병행 감지"
+            ) {
+                BeaconEditor(
+                    enabled = bleEnabled,
+                    beaconId = companyBeaconId,
+                    onEnabledChange = viewModel::setBleEnabled,
+                    onRegister = viewModel::registerCompanyBeacon,
+                    onClear = viewModel::clearCompanyBeacon
+                )
             }
 
             RuleCard(
@@ -218,6 +248,21 @@ fun SettingsScreen(
                             onClick = { importLauncher.launch(arrayOf("application/json")) },
                             modifier = Modifier.weight(1f)
                         ) { Text("백업 복원") }
+                    }
+                    Text(
+                        "기록은 백업과 별개로 앱 내부 로그에 자동 저장됩니다. 재설치·DB 손상으로 기록이 사라져도 아래 버튼으로 되살릴 수 있습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = viewModel::recoverFromJournal,
+                        enabled = recoverableCount > 0,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (recoverableCount > 0) "기록 로그에서 복구 (${recoverableCount}건)"
+                            else "복구할 기록 없음"
+                        )
                     }
                 }
             }
@@ -430,4 +475,159 @@ private fun LunchWindowEditor(startMinute: Int, endMinute: Int, onSave: (Int, In
             }
         ) { TimePicker(state = state) }
     }
+}
+
+/**
+ * The BLE-beacon counterpart to the 회사 AP 등록 card: an on/off toggle for parallel detection plus
+ * a "search nearby beacons and tap to register" flow that mirrors the Wi-Fi one. Registering a
+ * beacon turns parallel detection on, since picking one is a clear statement of intent to use it.
+ *
+ * BLE scanning needs BLUETOOTH_SCAN on Android 12+, which isn't part of the app's startup grant
+ * (it's opt-in hardware), so both the toggle and the search request it on demand and only proceed
+ * once granted — the same shape as the home screen's location request.
+ */
+@Composable
+private fun BeaconEditor(
+    enabled: Boolean,
+    beaconId: String?,
+    onEnabledChange: (Boolean) -> Unit,
+    onRegister: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    val context = LocalContext.current
+    var showSearch by remember { mutableStateOf(false) }
+    var enableAfterGrant by remember { mutableStateOf(false) }
+    var openSearchAfterGrant by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        val granted = hasBleScanPermission(context)
+        if (granted && enableAfterGrant) onEnabledChange(true)
+        if (granted && openSearchAfterGrant) showSearch = true
+        enableAfterGrant = false
+        openSearchAfterGrant = false
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "와이파이가 안 잡혀도(예: 와이파이 끄고 LTE 사용) 자리 근처 비콘으로 회사를 감지합니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(if (enabled) "사용함" else "사용 안 함")
+            Switch(
+                checked = enabled,
+                onCheckedChange = { want ->
+                    if (want && !hasBleScanPermission(context)) {
+                        enableAfterGrant = true
+                        permissionLauncher.launch(requiredBleScanPermissions())
+                    } else {
+                        onEnabledChange(want)
+                    }
+                }
+            )
+        }
+        Text(
+            beaconId?.let { "등록된 비콘: $it" } ?: "등록된 비콘 없음",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (beaconId == null && enabled) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    if (!hasBleScanPermission(context)) {
+                        openSearchAfterGrant = true
+                        permissionLauncher.launch(requiredBleScanPermissions())
+                    } else {
+                        showSearch = true
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text("주변 비콘 검색") }
+            if (beaconId != null) {
+                TextButton(onClick = onClear) { Text("등록 해제") }
+            }
+        }
+    }
+
+    if (showSearch) {
+        BeaconSearchDialog(
+            onSelect = { token ->
+                onRegister(token)
+                // Picking a beacon is intent to use it, so switch parallel detection on if it isn't.
+                if (!enabled) onEnabledChange(true)
+                showSearch = false
+            },
+            onDismiss = { showSearch = false }
+        )
+    }
+}
+
+/**
+ * Scans briefly for nearby office-format beacons and lists their tokens (strongest first) for the
+ * user to pick — the BLE mirror of [WifiSearchDialog]. Distinguishes "Bluetooth is off" from "found
+ * nothing", since the fix for each is different.
+ */
+@Composable
+private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var tokens by remember { mutableStateOf<List<String>>(emptyList()) }
+    var scanning by remember { mutableStateOf(true) }
+    var noBluetooth by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (!isBluetoothOn(context)) {
+            noBluetooth = true
+            scanning = false
+            return@LaunchedEffect
+        }
+        tokens = scanNearbyBeacons(context)
+        scanning = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("주변 비콘 검색") },
+        text = {
+            when {
+                scanning -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    Text("검색 중...")
+                }
+                noBluetooth -> Text(
+                    "블루투스가 꺼져 있습니다. 블루투스를 켜고 다시 시도하세요.",
+                    color = MaterialTheme.colorScheme.error
+                )
+                tokens.isEmpty() -> Text(
+                    "주변에서 회사 비콘을 찾지 못했습니다. 비콘(노트북·ESP32)이 켜져 있는지 확인하세요.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    items(tokens) { token ->
+                        Text(
+                            token,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(token) }
+                                .padding(vertical = 12.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+    )
 }

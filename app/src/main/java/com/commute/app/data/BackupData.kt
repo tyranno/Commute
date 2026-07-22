@@ -19,6 +19,8 @@ private const val BACKUP_FORMAT_VERSION = 1
 data class BackupSettings(
     val companySsid: String?,
     val companyBssids: Set<String>,
+    val bleEnabled: Boolean,
+    val companyBeaconId: String?,
     val monitoringEnabled: Boolean,
     val absenceThresholdMinutes: Int,
     val autoLeaveAfterAwayMinutes: Int,
@@ -44,6 +46,8 @@ fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, export
         JSONObject().apply {
             put("companySsid", settings.companySsid ?: JSONObject.NULL)
             put("companyBssids", JSONArray().apply { settings.companyBssids.forEach { put(it) } })
+            put("bleEnabled", settings.bleEnabled)
+            put("companyBeaconId", settings.companyBeaconId ?: JSONObject.NULL)
             put("monitoringEnabled", settings.monitoringEnabled)
             put("absenceThresholdMinutes", settings.absenceThresholdMinutes)
             put("autoLeaveAfterAwayMinutes", settings.autoLeaveAfterAwayMinutes)
@@ -85,6 +89,11 @@ fun parseBackupJson(json: String): ParsedBackup {
         companyBssids = settingsJson.optJSONArray("companyBssids")?.let { array ->
             (0 until array.length()).mapNotNull { array.optString(it, "").ifBlank { null } }.toSet()
         } ?: emptySet(),
+        // Absent in backups predating BLE support — default to off/unregistered, the same as a
+        // fresh install that never opted into beacon detection.
+        bleEnabled = settingsJson.optBoolean("bleEnabled", false),
+        companyBeaconId = if (settingsJson.isNull("companyBeaconId")) null
+            else settingsJson.optString("companyBeaconId", "").ifBlank { null },
         monitoringEnabled = settingsJson.optBoolean("monitoringEnabled", false),
         absenceThresholdMinutes = settingsJson.optInt(
             "absenceThresholdMinutes",

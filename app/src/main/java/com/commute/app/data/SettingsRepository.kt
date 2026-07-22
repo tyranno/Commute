@@ -18,6 +18,8 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val COMPANY_SSID = stringPreferencesKey("company_ssid")
         val COMPANY_BSSIDS = stringSetPreferencesKey("company_bssids")
+        val BLE_ENABLED = booleanPreferencesKey("ble_enabled")
+        val COMPANY_BEACON_ID = stringPreferencesKey("company_beacon_id")
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
         val IS_AT_WORK = booleanPreferencesKey("is_at_work")
         val LAST_SEEN_AT = longPreferencesKey("last_seen_at")
@@ -39,6 +41,16 @@ class SettingsRepository(private val context: Context) {
      * single value, because an office usually runs several APs on the same SSID. Empty means
      * "registered before BSSID matching existed", which falls back to SSID-only detection. */
     val companyBssids: Flow<Set<String>> = context.dataStore.data.map { it[Keys.COMPANY_BSSIDS] ?: emptySet() }
+
+    /** Whether to detect the office by a Bluetooth beacon *in parallel* with Wi-Fi — either signal
+     * counts as present, so being in Wi-Fi range or near the beacon is enough. Off by default; the
+     * beacon (a laptop dongle or ESP32, see doc/ble-beacon) is opt-in extra hardware. */
+    val bleEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.BLE_ENABLED] ?: false }
+
+    /** The registered office beacon's manufacturer-payload token (e.g. "COMMUTE1") — the stable
+     * identity a scan matches on, since the advertiser's MAC rotates. The BLE analogue of
+     * [companySsid]; null means no beacon registered yet. */
+    val companyBeaconId: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_BEACON_ID] }
     val monitoringEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.MONITORING_ENABLED] ?: false }
     val isAtWork: Flow<Boolean> = context.dataStore.data.map { it[Keys.IS_AT_WORK] ?: false }
     val lastSeenAt: Flow<Long?> = context.dataStore.data.map { it[Keys.LAST_SEEN_AT] }
@@ -98,6 +110,18 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setCompanyBssids(bssids: Set<String>) {
         context.dataStore.edit { it[Keys.COMPANY_BSSIDS] = bssids }
+    }
+
+    suspend fun setBleEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.BLE_ENABLED] = enabled }
+    }
+
+    suspend fun setCompanyBeaconId(token: String) {
+        context.dataStore.edit { it[Keys.COMPANY_BEACON_ID] = token }
+    }
+
+    suspend fun clearCompanyBeaconId() {
+        context.dataStore.edit { it.remove(Keys.COMPANY_BEACON_ID) }
     }
 
     suspend fun setMonitoringEnabled(enabled: Boolean) {
