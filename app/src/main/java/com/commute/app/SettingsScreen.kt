@@ -66,6 +66,7 @@ fun SettingsScreen(
     val companyBssids by viewModel.companyBssids.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val autoLeaveAfterAwayMinutes by viewModel.autoLeaveAfterAwayMinutes.collectAsState()
+    val leaveMarginMinutes by viewModel.leaveMarginMinutes.collectAsState()
     val workEndMinute by viewModel.workEndMinute.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
@@ -148,6 +149,16 @@ fun SettingsScreen(
                     workEndMinute = workEndMinute,
                     onSaveAfterAwayMinutes = viewModel::setAutoLeaveAfterAwayMinutes,
                     onSaveWorkEndMinute = viewModel::setWorkEndMinute
+                )
+            }
+
+            RuleCard(
+                icon = Icons.Filled.AccessTime,
+                title = "퇴근 시각 마진"
+            ) {
+                LeaveMarginEditor(
+                    minutes = leaveMarginMinutes,
+                    onSave = viewModel::setLeaveMarginMinutes
                 )
             }
 
@@ -257,6 +268,29 @@ private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
         options = ABSENCE_THRESHOLD_OPTIONS_MINUTES.toList(),
         onSave = onSave
     )
+}
+
+/** 0분(보정 안 함)부터 10분까지 1분 단위 — 전파 꼬리는 보통 몇 분이라 이 범위면 충분하고, 1분
+ * 단위면 자리 이탈 시각을 세밀하게 맞출 수 있다. */
+private val LEAVE_MARGIN_OPTIONS_MINUTES = (0..10).toList()
+
+/** 퇴근 시각을 lastSeenAt에서 이만큼 앞당긴다 — 회사 밖에서도 신호가 잡혀 실제 이탈보다 늦게
+ * 찍히는 걸 보정. 자리 이탈 후 남는 전파 꼬리를 사용자가 직접 조절하는 값. */
+@Composable
+private fun LeaveMarginEditor(minutes: Int, onSave: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "자리를 떠도 신호가 몇 분 더 잡혀 퇴근이 늦게 찍힙니다. 그만큼 앞당겨 기록합니다. (0분이면 보정 안 함)",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        MinutesDropdown(
+            label = "퇴근 시각 앞당김",
+            minutes = minutes,
+            options = LEAVE_MARGIN_OPTIONS_MINUTES,
+            onSave = onSave
+        )
+    }
 }
 
 /** Shared duration picker for the rule cards — a read-only field opening a fixed option list. */

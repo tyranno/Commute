@@ -61,6 +61,29 @@ fun arriveTimestamp(observedAt: Long?, now: Long, lastEventAt: Long?): Long {
 const val MAX_ARRIVE_BACKDATE_MS = 30 * 60_000L
 
 /**
+ * The timestamp a 퇴근(LEAVE) should carry: the last confirmed sighting [lastSeenAt] pulled back by
+ * a fixed [marginMinutes].
+ *
+ * The company AP keeps turning up in scans for a few minutes after the person physically leaves —
+ * the scan-cache RF tail — so the last real sighting already sits *later* than the true departure,
+ * and stamping a 퇴근 at it credits work that wasn't done (a 19:14 departure logged as 19:18). The
+ * margin trims that overshoot. It's a single user-tunable value rather than a computed one because
+ * the tail length varies day to day and no per-day estimate is reliable; [marginMinutes] == 0
+ * disables the trim entirely.
+ *
+ * Floored at [floorAt] — the newest instant already on record (the session's own 출근, or a prior
+ * event) — so the trim can never drag a 퇴근 back before its 출근 and produce a negative-length or
+ * overlapping session that [computeDailyWorkStats][com.commute.app.data.computeDailyWorkStats]
+ * would mis-total. Mirrors [arriveTimestamp]'s shape, and is top-level for the same reason:
+ * unit-testable without a running Service.
+ */
+fun leaveTimestamp(lastSeenAt: Long, marginMinutes: Int, floorAt: Long?): Long {
+    val floor = floorAt ?: Long.MIN_VALUE
+    if (floor >= lastSeenAt) return lastSeenAt
+    return (lastSeenAt - marginMinutes * 60_000L).coerceIn(floor, lastSeenAt)
+}
+
+/**
  * Whether an absence running since [awaySince] should be closed out as 퇴근 as of [now].
  *
  * Two independent triggers, either of which is enough:
@@ -106,10 +129,13 @@ fun autoLeaveDue(
  *  - never resolved, and it has run for 자동 퇴근 처리 기준 (default 3h) or crossed 근무 인정 시간
  *    종료 (default 22:00) → the person went home. See [autoLeaveDue].
  *
- * The auto-leave stamp is the moment the absence *started*, not the moment the threshold was
- * reached: leaving the office at 18:00 and being detected as gone at 21:00 is still an 18:00
- * 퇴근. This is what actually records a 퇴근 on a normal day; the day-boundary safety net below
- * only catches sessions that somehow outlived it (monitoring off, phone dead, service killed).
+ * The auto-leave stamp is the last moment presence was actually confirmed (lastSeenAt — the last
+ * scan that truly saw the AP), not the moment the threshold was reached and not the first missed
+ * poll: leaving the office at 18:00 and being detected as gone at 21:00 is still an 18:00 퇴근, and
+ * because the scan cache keeps the AP visible for minutes after someone leaves, backdating to the
+ * last real sighting is what keeps a 퇴근 from being credited later than it happened. This is what
+ * actually records a 퇴근 on a normal day; the day-boundary safety net below only catches sessions
+ * that somehow outlived it (monitoring off, phone dead, service killed).
  *
  * Being detected again after an auto-leave is a genuinely new session, so it does record a second
  * ARRIVE for the day — someone who left at 18:00 and came back at 22:30 really did arrive twice,
@@ -220,11 +246,18 @@ class WifiMonitorService : Service() {
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
-                    recordEvent(CommuteEventType.LEAVE, companySsid, lastSeen)
+                    // Same RF-tail trim as the normal auto-leave below — this close is stamped from
+                    // lastSeen too, so it carries the same overshoot. See [leaveTimestamp].
+                    val leftAt = leaveTimestamp(
+                        lastSeen,
+                        settingsRepository.leaveMarginMinutes.first(),
+                        latestEventTimestamp()
+                    )
+                    recordEvent(CommuteEventType.LEAVE, companySsid, leftAt)
                     showEventNotification(
                         applicationContext,
                         "퇴근 기록됨",
-                        "날짜 변경으로 자동 마감 ${timeFormat.format(Date(lastSeen))}"
+                        "날짜 변경으로 자동 마감 ${timeFormat.format(Date(leftAt))}"
                     )
                     wasAtWork = false
                 }
@@ -238,7 +271,17 @@ class WifiMonitorService : Service() {
                 // Written before anything else so the invariant "isAtWork implies lastSeenAt is
                 // set" can't be broken by a cancel mid-poll: lastSeenAt is the only stamp the
                 // day-boundary net can close a session with, and losing it strands the session.
-                settingsRepository.setLastSeenAt(now)
+                //
+                // Stamped with when the OS scan actually last saw the AP, not when this poll ran —
+                // those differ by the scan-cache lag, and this is the value a 퇴근 is backdated to,
+                // so it must be the true last moment of presence, never merely "when we noticed".
+                // Floored at the previous lastSeenAt so a momentarily stale cache read can't drag
+                // the last-seen evidence backwards; capped at now since a scan can't be in the
+                // future. Falls back to now when there's no usable stamp (live-connection match).
+                val prevSeen = settingsRepository.lastSeenAt.first()
+                val seenAt = maxOf(detection.lastObservedAt ?: now, prevSeen ?: Long.MIN_VALUE)
+                    .coerceAtMost(now)
+                settingsRepository.setLastSeenAt(seenAt)
                 if (!wasAtWork) {
                     // Stamped with when the OS actually saw the AP, not when this poll got to run
                     // — those differ by minutes whenever the device was dozing. See
@@ -306,16 +349,34 @@ class WifiMonitorService : Service() {
                         settingsRepository.workEndMinute.first()
                     )
                 ) {
+                    // The *decision* to leave is measured from awaySince (the first miss — long
+                    // enough unseen to be sure they're gone), but the *stamp* is lastSeenAt: the
+                    // last scan that actually saw the AP, i.e. the last moment they were provably
+                    // still here. That's a few minutes earlier than the first miss, because the
+                    // scan cache keeps the AP visible after they've physically left — so stamping
+                    // the first miss credits work that wasn't done. Backdating to lastSeenAt never
+                    // records a 퇴근 later than the real one. (lastSeenAt is guaranteed set here:
+                    // isAtWork implies it, per the invariant above; awaySince is only a fallback.)
+                    // Trimmed back by the 퇴근 마진 to undo the scan-cache RF tail (default 3분): the
+                    // AP lingers in scans a few minutes after the person leaves, so lastSeenAt is
+                    // already later than the real departure. Floored at the last recorded event so
+                    // the trim can't precede this session's 출근. See [leaveTimestamp].
+                    val lastSeen = settingsRepository.lastSeenAt.first() ?: awaySince
+                    val leftAt = leaveTimestamp(
+                        lastSeen,
+                        settingsRepository.leaveMarginMinutes.first(),
+                        latestEventTimestamp()
+                    )
                     // State first, insert second — same reasoning as the day-boundary LEAVE:
                     // a cancel in between would re-insert an identical LEAVE every poll.
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
-                    recordEvent(CommuteEventType.LEAVE, companySsid, awaySince)
+                    recordEvent(CommuteEventType.LEAVE, companySsid, leftAt)
                     showEventNotification(
                         applicationContext,
                         "퇴근 기록됨",
-                        "자리비움이 이어져 자동 마감 ${timeFormat.format(Date(awaySince))}"
+                        "자리비움이 이어져 자동 마감 ${timeFormat.format(Date(leftAt))}"
                     )
                 }
             }

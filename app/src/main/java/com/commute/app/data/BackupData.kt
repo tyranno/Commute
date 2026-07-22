@@ -22,6 +22,7 @@ data class BackupSettings(
     val monitoringEnabled: Boolean,
     val absenceThresholdMinutes: Int,
     val autoLeaveAfterAwayMinutes: Int,
+    val leaveMarginMinutes: Int,
     val workEndMinute: Int,
     val lunchStartMinute: Int,
     val lunchEndMinute: Int,
@@ -46,6 +47,7 @@ fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, export
             put("monitoringEnabled", settings.monitoringEnabled)
             put("absenceThresholdMinutes", settings.absenceThresholdMinutes)
             put("autoLeaveAfterAwayMinutes", settings.autoLeaveAfterAwayMinutes)
+            put("leaveMarginMinutes", settings.leaveMarginMinutes)
             put("workEndMinute", settings.workEndMinute)
             put("lunchStartMinute", settings.lunchStartMinute)
             put("lunchEndMinute", settings.lunchEndMinute)
@@ -91,6 +93,12 @@ fun parseBackupJson(json: String): ParsedBackup {
         autoLeaveAfterAwayMinutes = settingsJson.optInt(
             "autoLeaveAfterAwayMinutes",
             SettingsRepository.DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES
+        ),
+        // Absent in older backups — default to the standard 3분 trim rather than 0, so a restore
+        // doesn't silently turn the correction off for someone who never touched the setting.
+        leaveMarginMinutes = settingsJson.optInt(
+            "leaveMarginMinutes",
+            SettingsRepository.DEFAULT_LEAVE_MARGIN_MINUTES
         ),
         workEndMinute = settingsJson.optInt("workEndMinute", SettingsRepository.DEFAULT_WORK_END_MINUTE),
         lunchStartMinute = settingsJson.optInt("lunchStartMinute", SettingsRepository.DEFAULT_LUNCH_START_MINUTE),

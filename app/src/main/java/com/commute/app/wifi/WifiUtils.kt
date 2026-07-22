@@ -63,18 +63,25 @@ fun isCompanyWifiNearby(context: Context, companySsid: String, companyBssids: Se
  * walk into the office, the scan cache already knows the AP appeared several minutes before the
  * poll that reads it. Null when there's no usable stamp (matched via the live connection, or the
  * platform reported a nonsense timestamp), meaning "as of now".
+ *
+ * [observedAt] is the *earliest* matching scan (first moment of presence, for backdating an 출근);
+ * [lastObservedAt] is the *latest* (most recent moment we have positive evidence of presence).
+ * The latter is the mirror image for 퇴근: after someone leaves, the AP lingers in the scan cache
+ * until the next scan drops it, so the poll that finally reads a miss is minutes late — but that
+ * last matching scan's stamp is when they were really still there. Same null meaning as [observedAt].
  */
-data class CompanyWifiDetection(val nearby: Boolean, val observedAt: Long?)
+data class CompanyWifiDetection(val nearby: Boolean, val observedAt: Long?, val lastObservedAt: Long?)
 
 /**
  * [isCompanyWifiNearby]'s answer plus *when* the evidence for it was captured — see
  * [CompanyWifiDetection.observedAt]. A live connection is reported with a null stamp rather than a
  * backdated one: being associated says nothing about when association began.
  *
- * The stamp is the earliest of the matching scan results. Each cached result carries the time of
- * the last scan that saw that BSSID, so with several office APs the earliest is the first moment
- * any of them came into view — which is the moment the person arrived. Using the freshest instead
- * would throw away exactly the delay this exists to recover.
+ * Each cached result carries the time of the last scan that saw that BSSID, so with several office
+ * APs [observedAt] (the earliest) is the first moment any of them came into view — the moment the
+ * person arrived — while [lastObservedAt] (the latest) is the most recent moment any was still in
+ * view, which is what a 퇴근 is backdated to. Both stamps are reported; the caller picks the edge
+ * it needs.
  */
 @Suppress("DEPRECATION")
 fun detectCompanyWifi(
@@ -84,21 +91,21 @@ fun detectCompanyWifi(
 ): CompanyWifiDetection {
     val wifiManager = context.applicationContext
         .getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        ?: return CompanyWifiDetection(nearby = false, observedAt = null)
+        ?: return CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
 
     val connection = wifiManager.connectionInfo
     val connectionMatches = connection.cleanSsid() == companySsid &&
         (companyBssids.isEmpty() || connection?.bssid?.normalizeBssid() in companyBssids)
-    if (connectionMatches) return CompanyWifiDetection(nearby = true, observedAt = null)
+    if (connectionMatches) return CompanyWifiDetection(nearby = true, observedAt = null, lastObservedAt = null)
 
     val matches = wifiManager.scanResults.filter { result ->
         result.SSID?.trim('"') == companySsid &&
             (companyBssids.isEmpty() || result.BSSID?.normalizeBssid() in companyBssids)
     }
-    if (matches.isEmpty()) return CompanyWifiDetection(nearby = false, observedAt = null)
+    if (matches.isEmpty()) return CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
 
-    val observedAt = matches.mapNotNull { it.wallClockSeenAt() }.minOrNull()
-    return CompanyWifiDetection(nearby = true, observedAt = observedAt)
+    val stamps = matches.mapNotNull { it.wallClockSeenAt() }
+    return CompanyWifiDetection(nearby = true, observedAt = stamps.minOrNull(), lastObservedAt = stamps.maxOrNull())
 }
 
 /**

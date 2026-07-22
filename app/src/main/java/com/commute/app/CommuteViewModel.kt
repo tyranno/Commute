@@ -74,6 +74,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
             SettingsRepository.DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES
         )
 
+    val leaveMarginMinutes: StateFlow<Int> = settingsRepository.leaveMarginMinutes
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_LEAVE_MARGIN_MINUTES
+        )
+
     val workEndMinute: StateFlow<Int> = settingsRepository.workEndMinute
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_WORK_END_MINUTE)
 
@@ -186,6 +193,10 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepository.setAutoLeaveAfterAwayMinutes(minutes) }
     }
 
+    fun setLeaveMarginMinutes(minutes: Int) {
+        viewModelScope.launch { settingsRepository.setLeaveMarginMinutes(minutes) }
+    }
+
     fun setWorkEndMinute(minuteOfDay: Int) {
         viewModelScope.launch { settingsRepository.setWorkEndMinute(minuteOfDay) }
     }
@@ -230,6 +241,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                     monitoringEnabled = settingsRepository.monitoringEnabled.first(),
                     absenceThresholdMinutes = settingsRepository.absenceThresholdMinutes.first(),
                     autoLeaveAfterAwayMinutes = settingsRepository.autoLeaveAfterAwayMinutes.first(),
+                    leaveMarginMinutes = settingsRepository.leaveMarginMinutes.first(),
                     workEndMinute = settingsRepository.workEndMinute.first(),
                     lunchStartMinute = settingsRepository.lunchStartMinute.first(),
                     lunchEndMinute = settingsRepository.lunchEndMinute.first(),
@@ -271,6 +283,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 settingsRepository.setCompanyBssids(parsed.settings.companyBssids)
                 settingsRepository.setAbsenceThresholdMinutes(parsed.settings.absenceThresholdMinutes)
                 settingsRepository.setAutoLeaveAfterAwayMinutes(parsed.settings.autoLeaveAfterAwayMinutes)
+                settingsRepository.setLeaveMarginMinutes(parsed.settings.leaveMarginMinutes)
                 settingsRepository.setWorkEndMinute(parsed.settings.workEndMinute)
                 settingsRepository.setLunchWindow(parsed.settings.lunchStartMinute, parsed.settings.lunchEndMinute)
                 settingsRepository.setShowWeekend(parsed.settings.showWeekend)

@@ -25,6 +25,7 @@ class SettingsRepository(private val context: Context) {
         val PROVISIONAL_AWAY_SINCE_AT = longPreferencesKey("provisional_away_since_at")
         val ABSENCE_THRESHOLD_MINUTES = intPreferencesKey("absence_threshold_minutes")
         val AUTO_LEAVE_AFTER_AWAY_MINUTES = intPreferencesKey("auto_leave_after_away_minutes")
+        val LEAVE_MARGIN_MINUTES = intPreferencesKey("leave_margin_minutes")
         val WORK_END_MINUTE = intPreferencesKey("work_end_minute")
         val LUNCH_START_MINUTE = intPreferencesKey("lunch_start_minute")
         val LUNCH_END_MINUTE = intPreferencesKey("lunch_end_minute")
@@ -60,6 +61,14 @@ class SettingsRepository(private val context: Context) {
      * 전에 회사 와이파이가 다시 잡히면 그냥 자리비움으로 끝나고 세션은 계속된다. */
     val autoLeaveAfterAwayMinutes: Flow<Int> = context.dataStore.data.map {
         it[Keys.AUTO_LEAVE_AFTER_AWAY_MINUTES] ?: DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES
+    }
+
+    /** 퇴근 시각을 앞당길 마진(분, 기본 3분). 회사 와이파이는 자리를 뜬 뒤에도 스캔 캐시의 전파 꼬리 때문에
+     * 몇 분간 더 잡혀서, "마지막으로 실제 감지된 시각"(lastSeenAt)이 실제 이탈 시각보다 늦다. 이 값만큼
+     * lastSeenAt에서 빼서 그 과다분을 보정한다. 꼬리 길이가 날마다 달라 자동 추정이 어려우니 사용자가
+     * 직접 조절하는 단일 값으로 둔다. 0이면 보정하지 않는다. 출근·자리비움 시각에는 적용하지 않는다. */
+    val leaveMarginMinutes: Flow<Int> = context.dataStore.data.map {
+        it[Keys.LEAVE_MARGIN_MINUTES] ?: DEFAULT_LEAVE_MARGIN_MINUTES
     }
 
     /** 근무 인정 시간의 끝(자정 기준 분, 가산 연구소 운영 방안 기준 22:00). 이 시각을 넘긴 자리비움은
@@ -140,6 +149,10 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.AUTO_LEAVE_AFTER_AWAY_MINUTES] = minutes }
     }
 
+    suspend fun setLeaveMarginMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.LEAVE_MARGIN_MINUTES] = minutes }
+    }
+
     suspend fun setWorkEndMinute(minuteOfDay: Int) {
         context.dataStore.edit { it[Keys.WORK_END_MINUTE] = minuteOfDay }
     }
@@ -158,6 +171,7 @@ class SettingsRepository(private val context: Context) {
     companion object {
         const val DEFAULT_ABSENCE_THRESHOLD_MINUTES = 10
         const val DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES = 3 * 60 // 3시간
+        const val DEFAULT_LEAVE_MARGIN_MINUTES = 3 // 전파 꼬리 보정 — 퇴근 시각을 3분 앞당김
         const val DEFAULT_WORK_END_MINUTE = 22 * 60 // 22:00 — 근무 인정 시간 상한
         const val DEFAULT_LUNCH_START_MINUTE = 11 * 60 + 20 // 11:20 — 실제 운영 중인 점심시간 기준
         const val DEFAULT_LUNCH_END_MINUTE = 12 * 60 + 20 // 12:20
