@@ -40,10 +40,7 @@ import com.commute.app.data.CommuteEventType
 import com.commute.app.data.MissingRecordFlag
 import com.commute.app.data.MissingRecordType
 import com.commute.app.data.startOfDay
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 import java.util.TimeZone
 
 /**
@@ -75,16 +72,18 @@ fun EditEventDialog(
     var showTimePicker by remember { mutableStateOf(false) }
     var showEndTimePicker by remember { mutableStateOf(false) }
 
+    val s = LocalStrings.current
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isNew) "기록 추가" else "기록 수정") },
+        title = { Text(if (isNew) s.recordAddTitle else s.recordEditTitle) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(
-                        CommuteEventType.ARRIVE to "출근",
-                        CommuteEventType.LEAVE to "퇴근",
-                        CommuteEventType.AWAY to "자리비움"
+                        CommuteEventType.ARRIVE to s.eventArrive,
+                        CommuteEventType.LEAVE to s.eventLeave,
+                        CommuteEventType.AWAY to s.eventAway
                     ).forEach { (candidateType, label) ->
                         FilterChip(
                             selected = type == candidateType,
@@ -94,27 +93,27 @@ fun EditEventDialog(
                     }
                 }
                 PickerField(
-                    label = "날짜",
-                    value = formatDateOnly(dateMillis),
+                    label = s.dateLabel,
+                    value = s.leaveDate(dateMillis),
                     icon = Icons.Filled.CalendarToday,
                     onClick = { showDatePicker = true }
                 )
                 PickerField(
-                    label = if (type == CommuteEventType.AWAY) "시작 시각" else "시각",
+                    label = if (type == CommuteEventType.AWAY) s.awayStartTimeLabel else s.timeLabel,
                     value = formatHourMinute(hour, minute),
                     icon = Icons.Filled.AccessTime,
                     onClick = { showTimePicker = true }
                 )
                 if (type == CommuteEventType.AWAY) {
                     PickerField(
-                        label = "종료 시각",
+                        label = s.awayEndTimeLabel,
                         value = formatHourMinute(endHour, endMinute),
                         icon = Icons.Filled.AccessTime,
                         onClick = { showEndTimePicker = true }
                     )
                     if (combineDateTime(dateMillis, endHour, endMinute) <= combineDateTime(dateMillis, hour, minute)) {
                         Text(
-                            "종료 시각은 시작 시각보다 늦어야 합니다.",
+                            s.endAfterStart,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -122,7 +121,7 @@ fun EditEventDialog(
                 }
                 if (confirmingDelete) {
                     Text(
-                        "삭제하면 되돌릴 수 없습니다. 한 번 더 누르면 삭제됩니다.",
+                        s.deleteIrreversible,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -137,16 +136,16 @@ fun EditEventDialog(
                 if (valid) {
                     onSave(event.copy(type = type, timestamp = timestamp, endTimestamp = endTimestamp))
                 }
-            }) { Text(if (isNew) "추가" else "저장") }
+            }) { Text(if (isNew) s.add else s.save) }
         },
         dismissButton = {
             Row {
                 if (onDelete != null) {
                     TextButton(onClick = {
                         if (confirmingDelete) onDelete() else confirmingDelete = true
-                    }) { Text(if (confirmingDelete) "정말 삭제" else "삭제", color = MaterialTheme.colorScheme.error) }
+                    }) { Text(if (confirmingDelete) s.reallyDelete else s.delete, color = MaterialTheme.colorScheme.error) }
                 }
-                TextButton(onClick = onDismiss) { Text("취소") }
+                TextButton(onClick = onDismiss) { Text(s.cancel) }
             }
         }
     )
@@ -159,15 +158,15 @@ fun EditEventDialog(
                 TextButton(onClick = {
                     state.selectedDateMillis?.let { dateMillis = utcMillisToLocalMidnight(it) }
                     showDatePicker = false
-                }) { Text("확인") }
+                }) { Text(s.confirm) }
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("취소") } }
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text(s.cancel) } }
         ) { DatePicker(state = state) }
     }
     if (showTimePicker) {
         val state = rememberTimePickerState(initialHour = hour, initialMinute = minute, is24Hour = true)
         TimePickerDialog(
-            title = if (type == CommuteEventType.AWAY) "시작 시각 선택" else "시각 선택",
+            title = if (type == CommuteEventType.AWAY) s.startTimePickerTitle else s.timePickerSelect,
             onDismiss = { showTimePicker = false },
             onConfirm = { hour = state.hour; minute = state.minute; showTimePicker = false }
         ) { TimePicker(state = state) }
@@ -175,7 +174,7 @@ fun EditEventDialog(
     if (showEndTimePicker) {
         val state = rememberTimePickerState(initialHour = endHour, initialMinute = endMinute, is24Hour = true)
         TimePickerDialog(
-            title = "종료 시각 선택",
+            title = s.endTimePickerTitle,
             onDismiss = { showEndTimePicker = false },
             onConfirm = { endHour = state.hour; endMinute = state.minute; showEndTimePicker = false }
         ) { TimePicker(state = state) }
@@ -219,6 +218,7 @@ fun TimePickerDialog(
     onConfirm: () -> Unit,
     content: @Composable () -> Unit
 ) {
+    val s = LocalStrings.current
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             shape = MaterialTheme.shapes.extraLarge,
@@ -233,8 +233,8 @@ fun TimePickerDialog(
                 Text(title, style = MaterialTheme.typography.labelMedium)
                 content()
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("취소") }
-                    TextButton(onClick = onConfirm) { Text("확인") }
+                    TextButton(onClick = onDismiss) { Text(s.cancel) }
+                    TextButton(onClick = onConfirm) { Text(s.confirm) }
                 }
             }
         }
@@ -266,9 +266,6 @@ private fun hourOf(timestamp: Long): Int = Calendar.getInstance().apply { timeIn
 private fun minuteOf(timestamp: Long): Int = Calendar.getInstance().apply { timeInMillis = timestamp }.get(Calendar.MINUTE)
 
 private fun formatHourMinute(hour: Int, minute: Int): String = "%02d:%02d".format(hour, minute)
-
-private fun formatDateOnly(timestamp: Long): String =
-    SimpleDateFormat("yyyy-MM-dd (E)", Locale.KOREAN).format(Date(timestamp))
 
 private fun combineDateTime(dateMillis: Long, hour: Int, minute: Int): Long =
     Calendar.getInstance().apply {

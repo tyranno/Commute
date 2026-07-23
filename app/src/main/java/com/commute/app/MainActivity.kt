@@ -58,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +77,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -85,6 +87,7 @@ import com.commute.app.ble.hasBleScanPermission
 import com.commute.app.data.isWithinMinuteOfDayWindow
 import com.commute.app.ui.theme.CommuteTheme
 import com.commute.app.wifi.WifiMonitorService
+import com.commute.app.wifi.clearEventNotifications
 import com.commute.app.wifi.currentWifiSsid
 import com.commute.app.wifi.isCompanyWifiNearby
 import com.commute.app.wifi.nearbyWifiSsids
@@ -106,27 +109,43 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // Entering the app to check is exactly the moment the launcher badge should clear. The record
+    // notification only self-cancels when tapped, so opening from the icon otherwise leaves the
+    // badge stuck. onResume covers both a cold launch and returning from the background.
+    override fun onResume() {
+        super.onResume()
+        clearEventNotifications(this)
+    }
 }
 
 @Composable
 fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = "home") {
-        composable("home") {
-            CommuteScreen(
-                viewModel = viewModel,
-                onOpenSettings = { navController.navigate("settings") }
-            )
-        }
-        composable("settings") {
-            SettingsScreen(
-                viewModel = viewModel,
-                onBack = { navController.popBackStack() },
-                onOpenPolicyDocument = { navController.navigate("policy") }
-            )
-        }
-        composable("policy") {
-            PolicyDocumentScreen(onBack = { navController.popBackStack() })
+    // The whole UI reads its text through LocalStrings, resolved from the user's language choice —
+    // SYSTEM falls back to the device locale. Switching the setting recomposes everything instantly,
+    // no activity restart.
+    val language by viewModel.language.collectAsState()
+    val deviceLanguage = LocalConfiguration.current.locales[0].language
+    val strings = remember(language, deviceLanguage) { stringsFor(language.resolve(deviceLanguage)) }
+    CompositionLocalProvider(LocalStrings provides strings) {
+        NavHost(navController = navController, startDestination = "home") {
+            composable("home") {
+                CommuteScreen(
+                    viewModel = viewModel,
+                    onOpenSettings = { navController.navigate("settings") }
+                )
+            }
+            composable("settings") {
+                SettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenPolicyDocument = { navController.navigate("policy") }
+                )
+            }
+            composable("policy") {
+                PolicyDocumentScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }
@@ -135,6 +154,7 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
 @Composable
 fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
+    val s = LocalStrings.current
     val companySsid by viewModel.companySsid.collectAsState()
     val companyBssids by viewModel.companyBssids.collectAsState()
     val bleEnabled by viewModel.bleEnabled.collectAsState()
@@ -294,7 +314,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 title = { Text("Commute") },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "근무 규칙 설정")
+                        Icon(Icons.Filled.Settings, contentDescription = s.settingsTitle)
                     }
                 }
             )
@@ -318,10 +338,10 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 if (!hasLocationPermission) {
                     NoticeCard(
                         icon = Icons.Filled.LocationOn,
-                        title = "위치 권한 필요",
-                        message = "와이파이 이름을 읽고 출퇴근을 감지하려면 위치 권한이 필요합니다."
+                        title = s.locationPermTitle,
+                        message = s.locationPermMessage
                     ) {
-                        Button(onClick = { requestPermissions() }) { Text("권한 허용") }
+                        Button(onClick = { requestPermissions() }) { Text(s.grantPermission) }
                     }
                 } else if (!locationServicesEnabled) {
                     // Android requires the device's Location toggle to be on (separately from the
@@ -329,8 +349,8 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     // silently returns "<unknown ssid>" forever, which looks like a broken app.
                     NoticeCard(
                         icon = Icons.Filled.Warning,
-                        title = "위치 서비스 꺼짐",
-                        message = "위치 권한은 허용되어 있지만 기기의 위치 서비스(GPS)가 꺼져 있어 와이파이 이름을 읽을 수 없습니다. 설정에서 위치 서비스를 켜주세요."
+                        title = s.locationOffTitle,
+                        message = s.locationOffMessage
                     )
                 }
 
@@ -375,9 +395,9 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
             var selectedTab by remember { mutableIntStateOf(0) }
             Column(modifier = Modifier.weight(1f)) {
                 TabRow(selectedTabIndex = selectedTab) {
-                    Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("현황") })
-                    Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("기록") })
-                    Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("연차·외출") })
+                    Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(s.tabStatus) })
+                    Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text(s.tabRecords) })
+                    Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text(s.tabLeave) })
                 }
                 when (selectedTab) {
                     0 -> StatusTab(
@@ -432,11 +452,20 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
  * wifi" and "the service has officially logged it" (up to a minute later on its own 1-minute
  * cadence) as its own state, instead of leaving the user staring at a stale "퇴근" label.
  */
-private enum class CommuteStatus(val label: String) {
-    LEFT("퇴근"),
-    ARRIVAL_DETECTED("출근 인식됨"),
-    WORKING("근무중"),
-    AWAY("자리비움")
+private enum class CommuteStatus {
+    LEFT,
+    ARRIVAL_DETECTED,
+    WORKING,
+    AWAY
+}
+
+/** The localized label for a status — kept next to the enum so both the card title and any future
+ * caller stay in sync. */
+private fun CommuteStatus.label(s: Strings): String = when (this) {
+    CommuteStatus.LEFT -> s.statusLeft
+    CommuteStatus.ARRIVAL_DETECTED -> s.statusArrivalDetected
+    CommuteStatus.WORKING -> s.statusWorking
+    CommuteStatus.AWAY -> s.statusAway
 }
 
 /** The signal dropping isn't itself 자리비움 — [WifiMonitorService] only confirms it once
@@ -483,6 +512,7 @@ private fun CompactStatusCard(
     // Presence is OR'd across Wi-Fi and BLE, matching the background service's mergePresence, so
     // the card reads 근무중/출근 인식됨 when *either* radio sees the office — e.g. Wi-Fi off but at
     // your desk by the beacon. BLE only counts when the user has actually enabled it.
+    val s = LocalStrings.current
     val beaconDetectedNow = bleEnabled && companyBeaconDetectedNow
     val detectedNow = companyWifiDetectedNow || beaconDetectedNow
     val status = commuteStatus(isAtWork, detectedNow, awaySinceAt, absenceThresholdMinutes, nowMillis)
@@ -520,18 +550,18 @@ private fun CompactStatusCard(
                 )
                 Column(Modifier.weight(1f)) {
                     Text(
-                        if (isLunchTimeNow) "${status.label} · 점심시간" else status.label,
+                        if (isLunchTimeNow) "${status.label(s)} · ${s.lunchTag}" else status.label(s),
                         style = MaterialTheme.typography.titleMedium,
                         color = contentColor
                     )
                     Text(
-                        companySsid?.let { "회사 와이파이: $it" } ?: "회사 와이파이 미등록",
+                        companySsid?.let { s.companyWifiLabel(it) } ?: s.companyWifiNone,
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor
                     )
                     if (bleEnabled) {
                         Text(
-                            "회사 비콘: ${if (companyBeaconDetectedNow) "감지됨" else "미감지"}",
+                            s.companyBeaconLabel(companyBeaconDetectedNow),
                             style = MaterialTheme.typography.bodySmall,
                             color = contentColor
                         )
@@ -544,14 +574,14 @@ private fun CompactStatusCard(
                     Icon(
                         imageVector = if (companyBeaconDetectedNow) Icons.Filled.BluetoothConnected
                             else Icons.Filled.BluetoothDisabled,
-                        contentDescription = if (companyBeaconDetectedNow) "회사 비콘 감지됨" else "회사 비콘 미감지",
+                        contentDescription = if (companyBeaconDetectedNow) s.beaconDetectedDesc else s.beaconNotDetectedDesc,
                         tint = contentColor
                     )
                 }
                 IconButton(onClick = onOpenWifiSearch) {
                     Icon(
                         imageVector = if (currentSsid != null) Icons.Filled.Wifi else Icons.Filled.WifiOff,
-                        contentDescription = "주변 와이파이 검색",
+                        contentDescription = s.searchNearbyWifiDesc,
                         tint = contentColor
                     )
                 }
@@ -564,13 +594,13 @@ private fun CompactStatusCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        "현재 와이파이: ${currentSsid ?: "없음/알 수 없음"}",
+                        s.currentWifiLabel(currentSsid ?: s.wifiNoneUnknown),
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor,
                         modifier = Modifier.weight(1f)
                     )
                     TextButton(onClick = onRegister, enabled = currentSsid != null) {
-                        Text("회사 와이파이로 등록")
+                        Text(s.registerAsCompanyWifi)
                     }
                 }
             }
@@ -612,6 +642,7 @@ private fun NoticeCard(
 @Composable
 private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val s = LocalStrings.current
     var ssids by remember { mutableStateOf<List<String>>(emptyList()) }
     var scanning by remember { mutableStateOf(true) }
 
@@ -624,7 +655,7 @@ private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) 
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("주변 와이파이 검색") },
+        title = { Text(s.searchWifiTitle) },
         text = {
             when {
                 scanning -> Row(
@@ -632,10 +663,10 @@ private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) 
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    Text("검색 중...")
+                    Text(s.searching)
                 }
                 ssids.isEmpty() -> Text(
-                    "주변에서 와이파이를 찾지 못했습니다.",
+                    s.noNearbyWifi,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
@@ -652,7 +683,7 @@ private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) 
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text(s.close) } }
     )
 }
 

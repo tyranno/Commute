@@ -41,15 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.commute.app.data.DAILY_REQUIRED_MINUTES
 import com.commute.app.data.LeaveEntry
 import com.commute.app.data.LeaveType
 import com.commute.app.data.formatMinuteOfDayToHHmm
 import com.commute.app.data.leaveCreditMinutes
 import com.commute.app.data.startOfDay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * The 연차·외출 management tab: lists declared 연차/반차/외출 records (newest first) and lets the
@@ -66,6 +62,7 @@ fun LeaveTab(
     onDeleteLeave: (LeaveEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalStrings.current
     var editing by remember { mutableStateOf<LeaveEntry?>(null) }
     var adding by remember { mutableStateOf(false) }
 
@@ -83,7 +80,7 @@ fun LeaveTab(
                     modifier = Modifier.size(40.dp)
                 )
                 Text(
-                    "연차·반차·외출 기록이 없습니다.\n아래 + 버튼으로 추가하세요.",
+                    s.emptyLeaveMessage,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 12.dp)
@@ -103,7 +100,7 @@ fun LeaveTab(
         FloatingActionButton(
             onClick = { adding = true },
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
-        ) { Icon(Icons.Filled.Add, contentDescription = "연차/외출 추가") }
+        ) { Icon(Icons.Filled.Add, contentDescription = s.addLeaveOutingDesc) }
     }
 
     editing?.let { leave ->
@@ -128,6 +125,7 @@ fun LeaveTab(
 
 @Composable
 private fun LeaveRow(leave: LeaveEntry, lunchStartMinute: Int, lunchEndMinute: Int, onClick: () -> Unit) {
+    val s = LocalStrings.current
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -136,14 +134,14 @@ private fun LeaveRow(leave: LeaveEntry, lunchStartMinute: Int, lunchEndMinute: I
         ) {
             Icon(
                 Icons.Filled.BeachAccess,
-                contentDescription = leave.type.label,
+                contentDescription = s.leaveLabel(leave.type),
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
             )
             Column(modifier = Modifier.weight(1f)) {
-                Text(leave.type.label, style = MaterialTheme.typography.bodyMedium)
+                Text(s.leaveLabel(leave.type), style = MaterialTheme.typography.bodyMedium)
                 val subtitle = buildString {
-                    append(formatLeaveDate(leave.date))
+                    append(s.leaveDate(leave.date))
                     if (leave.type == LeaveType.OUTING && leave.startMinute != null && leave.endMinute != null) {
                         append(" · ${formatMinuteOfDayToHHmm(leave.startMinute)}~${formatMinuteOfDayToHHmm(leave.endMinute)}")
                     }
@@ -156,7 +154,7 @@ private fun LeaveRow(leave: LeaveEntry, lunchStartMinute: Int, lunchEndMinute: I
                 )
             }
             Text(
-                creditText(leave, lunchStartMinute, lunchEndMinute),
+                creditText(leave, lunchStartMinute, lunchEndMinute, s),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -173,6 +171,7 @@ fun LeaveEditDialog(
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit
 ) {
+    val s = LocalStrings.current
     var type by remember(entry) { mutableStateOf(entry.type) }
     var dateMillis by remember(entry) { mutableStateOf(startOfDay(entry.date)) }
     var startMinute by remember(entry) { mutableStateOf(entry.startMinute ?: DEFAULT_OUTING_START_MINUTE) }
@@ -188,7 +187,7 @@ fun LeaveEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isNew) "연차/외출 추가" else "연차/외출 수정") },
+        title = { Text(if (isNew) s.leaveAddTitle else s.leaveEditTitle) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 // FlowRow, not Row: the four type chips (연차/오전 반차/오후 반차/외출) overflow a
@@ -199,27 +198,27 @@ fun LeaveEditDialog(
                         FilterChip(
                             selected = type == candidate,
                             onClick = { type = candidate },
-                            label = { Text(candidate.label) }
+                            label = { Text(s.leaveLabel(candidate)) }
                         )
                     }
                 }
                 PickerField(
-                    label = "날짜",
-                    value = formatLeaveDate(dateMillis),
+                    label = s.dateLabel,
+                    value = s.leaveDate(dateMillis),
                     icon = Icons.Filled.CalendarToday,
                     onClick = { showDatePicker = true }
                 )
                 if (type == LeaveType.OUTING) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         PickerField(
-                            label = "시작",
+                            label = s.startLabel,
                             value = formatMinuteOfDayToHHmm(startMinute),
                             icon = Icons.Filled.CalendarToday,
                             onClick = { showStartPicker = true },
                             modifier = Modifier.weight(1f)
                         )
                         PickerField(
-                            label = "종료",
+                            label = s.endLabel,
                             value = formatMinuteOfDayToHHmm(endMinute),
                             icon = Icons.Filled.CalendarToday,
                             onClick = { showEndPicker = true },
@@ -228,7 +227,7 @@ fun LeaveEditDialog(
                     }
                     if (!outingValid) {
                         Text(
-                            "종료 시각은 시작 시각보다 늦어야 합니다.",
+                            s.endAfterStart,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -237,13 +236,13 @@ fun LeaveEditDialog(
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
-                    label = { Text("메모 (선택)") },
+                    label = { Text(s.noteOptional) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (confirmingDelete) {
                     Text(
-                        "삭제하면 되돌릴 수 없습니다. 한 번 더 누르면 삭제됩니다.",
+                        s.deleteIrreversible,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -265,16 +264,16 @@ fun LeaveEditDialog(
                         )
                     )
                 }
-            ) { Text(if (isNew) "추가" else "저장") }
+            ) { Text(if (isNew) s.add else s.save) }
         },
         dismissButton = {
             Row {
                 if (onDelete != null) {
                     TextButton(onClick = {
                         if (confirmingDelete) onDelete() else confirmingDelete = true
-                    }) { Text(if (confirmingDelete) "정말 삭제" else "삭제", color = MaterialTheme.colorScheme.error) }
+                    }) { Text(if (confirmingDelete) s.reallyDelete else s.delete, color = MaterialTheme.colorScheme.error) }
                 }
-                TextButton(onClick = onDismiss) { Text("취소") }
+                TextButton(onClick = onDismiss) { Text(s.cancel) }
             }
         }
     )
@@ -287,15 +286,15 @@ fun LeaveEditDialog(
                 TextButton(onClick = {
                     state.selectedDateMillis?.let { dateMillis = utcMillisToLocalMidnight(it) }
                     showDatePicker = false
-                }) { Text("확인") }
+                }) { Text(s.confirm) }
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("취소") } }
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text(s.cancel) } }
         ) { DatePicker(state = state) }
     }
     if (showStartPicker) {
         val state = rememberTimePickerState(initialHour = startMinute / 60, initialMinute = startMinute % 60, is24Hour = true)
         TimePickerDialog(
-            title = "시작 시각 선택",
+            title = s.startTimePickerTitle,
             onDismiss = { showStartPicker = false },
             onConfirm = { startMinute = state.hour * 60 + state.minute; showStartPicker = false }
         ) { TimePicker(state = state) }
@@ -303,7 +302,7 @@ fun LeaveEditDialog(
     if (showEndPicker) {
         val state = rememberTimePickerState(initialHour = endMinute / 60, initialMinute = endMinute % 60, is24Hour = true)
         TimePickerDialog(
-            title = "종료 시각 선택",
+            title = s.endTimePickerTitle,
             onDismiss = { showEndPicker = false },
             onConfirm = { endMinute = state.hour * 60 + state.minute; showEndPicker = false }
         ) { TimePicker(state = state) }
@@ -316,17 +315,7 @@ private const val DEFAULT_OUTING_END_MINUTE = 14 * 60
 private fun blankLeaveTemplate(): LeaveEntry =
     LeaveEntry(id = 0L, type = LeaveType.ANNUAL, date = startOfDay(System.currentTimeMillis()))
 
-private fun creditText(leave: LeaveEntry, lunchStartMinute: Int, lunchEndMinute: Int): String {
+private fun creditText(leave: LeaveEntry, lunchStartMinute: Int, lunchEndMinute: Int, strings: Strings): String {
     val minutes = leaveCreditMinutes(leave.type, leave.startMinute, leave.endMinute, lunchStartMinute, lunchEndMinute)
-    val hours = minutes / 60
-    val mins = minutes % 60
-    return when {
-        minutes == DAILY_REQUIRED_MINUTES -> "8시간"
-        mins == 0L -> "${hours}시간"
-        hours == 0L -> "${mins}분"
-        else -> "${hours}시간 ${mins}분"
-    }
+    return strings.durationLabel(minutes.toInt())
 }
-
-private fun formatLeaveDate(timestamp: Long): String =
-    SimpleDateFormat("yyyy-MM-dd (E)", Locale.KOREAN).format(Date(timestamp))

@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
+import com.commute.app.AppLanguage
+import com.commute.app.stringsFor
 import com.commute.app.ble.CompanyBeaconDetection
 import com.commute.app.ble.detectCompanyBeacon
 import com.commute.app.ble.mergePresence
@@ -159,7 +161,10 @@ class WifiMonitorService : Service() {
         super.onCreate()
         settingsRepository = SettingsRepository(applicationContext)
         recoveryJournal = RecoveryJournal(applicationContext)
-        ensureNotificationChannels(applicationContext)
+        // Channel names are set once at creation and can't be renamed later, so use the device
+        // locale here; the event notifications' actual content is localized per the user's choice
+        // in checkWifiState (where reading the stored preference can suspend).
+        ensureNotificationChannels(applicationContext, stringsFor(AppLanguage.SYSTEM))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -181,7 +186,7 @@ class WifiMonitorService : Service() {
         // and the system immediately restarted it into the same crash. Bail out quietly instead;
         // the watchdog retries the next time the app is genuinely in the foreground.
         try {
-            startForeground(MONITOR_NOTIFICATION_ID, buildMonitorNotification(this, "출퇴근 감지 중"))
+            startForeground(MONITOR_NOTIFICATION_ID, buildMonitorNotification(this, stringsFor(AppLanguage.SYSTEM).monitorStatus))
         } catch (e: Exception) {
             stopSelf()
             return START_NOT_STICKY
@@ -216,6 +221,7 @@ class WifiMonitorService : Service() {
 
     private suspend fun checkWifiState() {
         stateMutex.withLock {
+            val s = stringsFor(settingsRepository.language.first())
             val companySsid = settingsRepository.companySsid.first()
             val bleEnabled = settingsRepository.bleEnabled.first()
             val beaconId = settingsRepository.companyBeaconId.first()
@@ -287,8 +293,8 @@ class WifiMonitorService : Service() {
                     recordEvent(CommuteEventType.LEAVE, presenceLabel, leftAt)
                     showEventNotification(
                         applicationContext,
-                        "퇴근 기록됨",
-                        "날짜 변경으로 자동 마감 ${timeFormat.format(Date(leftAt))}"
+                        s.notifClockOutTitle,
+                        s.notifDayChangeClose(timeFormat.format(Date(leftAt)))
                     )
                     wasAtWork = false
                 }
@@ -322,8 +328,8 @@ class WifiMonitorService : Service() {
                     recordEvent(CommuteEventType.ARRIVE, presenceLabel, arrivedAt)
                     showEventNotification(
                         applicationContext,
-                        "출근 기록됨",
-                        "회사($presenceLabel) 감지 ${timeFormat.format(Date(arrivedAt))}"
+                        s.notifClockInTitle,
+                        s.notifClockInBody(presenceLabel, timeFormat.format(Date(arrivedAt)))
                     )
                 } else {
                     // Reconnected while still "at work": the session itself never ends here, but
@@ -342,8 +348,8 @@ class WifiMonitorService : Service() {
                             recordEvent(CommuteEventType.AWAY, presenceLabel, awaySince, endTimestamp = now)
                             showEventNotification(
                                 applicationContext,
-                                "자리비움 종료",
-                                "복귀 ${timeFormat.format(Date(now))} (자리비움 ${minutesBetween(awaySince, now)}분)"
+                                s.notifAwayEndTitle,
+                                s.notifAwayEndBody(timeFormat.format(Date(now)), minutesBetween(awaySince, now))
                             )
                         }
                     }
@@ -406,8 +412,8 @@ class WifiMonitorService : Service() {
                     recordEvent(CommuteEventType.LEAVE, presenceLabel, leftAt)
                     showEventNotification(
                         applicationContext,
-                        "퇴근 기록됨",
-                        "자리비움이 이어져 자동 마감 ${timeFormat.format(Date(leftAt))}"
+                        s.notifClockOutTitle,
+                        s.notifAutoCloseAwayBody(timeFormat.format(Date(leftAt)))
                     )
                 }
             }

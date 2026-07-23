@@ -134,6 +134,14 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val halfPmEndMinute: StateFlow<Int> = settingsRepository.halfPmEndMinute
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_HALF_PM_END_MINUTE)
 
+    /** Selected UI language — drives which [Strings] the whole UI renders (see [LocalStrings]). */
+    val language: StateFlow<AppLanguage> = settingsRepository.language
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppLanguage.SYSTEM)
+
+    /** The string table for the currently-selected language, for toasts shown from here (outside
+     * Compose, so [LocalStrings] isn't available). */
+    private suspend fun strings(): Strings = stringsFor(settingsRepository.language.first())
+
     /** Declared 연차/반차/외출 records, newest first — the manual counterpart to [events]. */
     val leaves: StateFlow<List<LeaveEntry>> = leaveDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -218,7 +226,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 // Registering from a stale scan list while out of range captures nothing, which
                 // silently falls back to name-only matching — the exact failure that logged a
                 // whole 출근/퇴근 pair off an unrelated "iptime5G". Say so instead of degrading quietly.
-                Toast.makeText(app, "AP를 찾지 못해 이름만으로 감지합니다. 회사에서 설정 > 회사 AP 등록을 눌러주세요", Toast.LENGTH_LONG).show()
+                Toast.makeText(app, strings().apNotFoundNameOnly, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -231,12 +239,12 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val found = nearbyBssidsFor(app, ssid)
             if (found.isEmpty()) {
-                Toast.makeText(app, "주변에 ${ssid} AP가 보이지 않습니다", Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, strings().apNotVisible(ssid), Toast.LENGTH_SHORT).show()
                 return@launch
             }
             val merged = settingsRepository.companyBssids.first() + found
             settingsRepository.setCompanyBssids(merged)
-            Toast.makeText(app, "회사 AP ${merged.size}대 등록됨", Toast.LENGTH_SHORT).show()
+            Toast.makeText(app, strings().apRegistered(merged.size), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -300,6 +308,28 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepository.setHalfDayPmWindow(startMinute, endMinute) }
     }
 
+    fun setLanguage(language: AppLanguage) {
+        viewModelScope.launch { settingsRepository.setLanguage(language) }
+    }
+
+    /** User-initiated data reset: wipes every commute event, leave entry, and the recovery journal,
+     * and clears the live session state so detection restarts cleanly. Detection settings (company
+     * Wi-Fi/beacon, rules, language) are deliberately preserved — this is "clear my history", not a
+     * factory reset. */
+    fun resetAllData() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            val s = strings()
+            withContext(Dispatchers.IO) {
+                dao.deleteAll()
+                leaveDao.deleteAll()
+                recoveryJournal.clear()
+            }
+            settingsRepository.clearSessionState()
+            Toast.makeText(app, s.resetDone, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun addLeave(entry: LeaveEntry) {
         viewModelScope.launch { leaveDao.insert(entry) }
     }
@@ -345,12 +375,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     fun recoverFromJournal() {
         val app = getApplication<Application>()
         viewModelScope.launch {
+            val s = strings()
             val restored = withContext(Dispatchers.IO) {
                 val missing = recoveryJournal.readMissing(dao.getAllOnce())
                 missing.forEach { dao.insert(it) }
                 missing.size
             }
-            val msg = if (restored > 0) "로그에서 ${restored}건 복구됨" else "복구할 기록이 없습니다"
+            val msg = if (restored > 0) s.recoveredFromLog(restored) else s.nothingToRecover
             Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
         }
     }
@@ -362,6 +393,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     fun exportBackup(uri: Uri) {
         val app = getApplication<Application>()
         viewModelScope.launch {
+            val s = strings()
             try {
                 val allEvents = dao.getAllOnce()
                 val allLeaves = leaveDao.getAllOnce()
@@ -391,11 +423,11 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.IO) {
                     val json = buildBackupJson(allEvents, allLeaves, settings, System.currentTimeMillis())
                     app.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
-                        ?: throw IllegalStateException("파일을 열 수 없습니다")
+                        ?: throw IllegalStateException(s.fileOpenFail)
                 }
-                Toast.makeText(app, "백업 완료 (기록 ${allEvents.size}건 · 연차/외출 ${allLeaves.size}건)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, s.backupDone(allEvents.size, allLeaves.size), Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(app, "백업 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, s.backupFail(e.message), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -407,13 +439,14 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     fun importBackup(uri: Uri) {
         val app = getApplication<Application>()
         viewModelScope.launch {
+            val s = strings()
             try {
                 // Stop the service first: it polls and writes on its own coroutine, and an event
                 // inserted between the delete and the insert would survive as an orphan.
                 WifiMonitorService.stop(app)
                 val parsed = withContext(Dispatchers.IO) {
                     val json = app.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
-                        ?: throw IllegalStateException("파일을 읽을 수 없습니다")
+                        ?: throw IllegalStateException(s.fileReadFail)
                     parseBackupJson(json)
                 }
                 dao.replaceAll(parsed.events)
@@ -439,13 +472,13 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 settingsRepository.setHalfDayPmWindow(parsed.settings.halfPmStartMinute, parsed.settings.halfPmEndMinute)
                 setMonitoringEnabled(parsed.settings.monitoringEnabled)
                 val apNote = if (parsed.settings.companyBssids.isEmpty() && parsed.settings.companySsid != null) {
-                    " · 회사 AP 정보가 없어 이름만으로 감지합니다"
+                    s.restoreApNote
                 } else {
                     ""
                 }
-                Toast.makeText(app, "복원 완료 (기록 ${parsed.events.size}건 · 연차/외출 ${parsed.leaves.size}건)$apNote", Toast.LENGTH_LONG).show()
+                Toast.makeText(app, s.restoreDone(parsed.events.size, parsed.leaves.size, apNote), Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
-                Toast.makeText(app, "복원 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, s.restoreFail(e.message), Toast.LENGTH_SHORT).show()
             }
         }
     }

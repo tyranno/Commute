@@ -84,6 +84,18 @@ class RecoveryJournal(context: Context) {
         return entries.filter { journalKey(it) !in have }.map { it.copy(id = 0L) }
     }
 
+    /** Deletes the whole journal — used by the user-initiated data reset, which wipes every record
+     * on purpose, so the safety net must be cleared too or [readMissing] would immediately offer to
+     * "recover" everything that was just deleted. */
+    fun clear() {
+        synchronized(lock) {
+            try {
+                if (file.exists()) file.delete()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
     private fun readEntriesLocked(): List<CommuteEvent> {
         if (!file.exists()) return emptyList()
         return file.readLines().mapNotNull { parseJournalLine(it) }

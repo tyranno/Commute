@@ -23,13 +23,16 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.BeachAccess
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Weekend
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -97,6 +100,8 @@ fun SettingsScreen(
     val halfPmEndMinute by viewModel.halfPmEndMinute.collectAsState()
     val showWeekend by viewModel.showWeekend.collectAsState()
     val recoverableCount by viewModel.recoverableCount.collectAsState()
+    val language by viewModel.language.collectAsState()
+    val s = LocalStrings.current
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let(viewModel::exportBackup)
@@ -108,13 +113,14 @@ fun SettingsScreen(
     // Settings grew past a single scroll — group them into tabs so each screen holds one concern:
     // 감지(어디를 회사로 볼지: Wi-Fi/BLE), 근무 규칙(시간 판정 규칙), 데이터(문서·백업·복구).
     var selectedTab by remember { mutableIntStateOf(0) }
+    var showResetDialog by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("근무 규칙 설정") },
+                title = { Text(s.settingsTitle) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -126,20 +132,20 @@ fun SettingsScreen(
                 .padding(innerPadding)
         ) {
             TabRow(selectedTabIndex = selectedTab) {
-                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("감지") })
-                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("근무 규칙") })
-                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("데이터") })
+                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(s.tabDetection) })
+                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text(s.tabRules) })
+                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text(s.tabData) })
             }
             when (selectedTab) {
                 0 -> SettingsTabColumn {
                     RuleCard(
                         icon = Icons.Filled.Router,
-                        title = "회사 AP 등록 (${companyBssids.size}대)"
+                        title = s.companyApTitle(companyBssids.size)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (companyBssids.isEmpty()) {
                                 Text(
-                                    "AP가 등록되지 않아 와이파이 이름만으로 감지합니다. 같은 이름의 다른 와이파이도 회사로 인식될 수 있으니, 회사에서 아래 버튼을 눌러 등록하세요.",
+                                    s.apNotRegisteredWarning,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error
                                 )
@@ -151,7 +157,7 @@ fun SettingsScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(bssid, style = MaterialTheme.typography.bodyMedium)
-                                        TextButton(onClick = { viewModel.removeCompanyBssid(bssid) }) { Text("삭제") }
+                                        TextButton(onClick = { viewModel.removeCompanyBssid(bssid) }) { Text(s.delete) }
                                     }
                                 }
                             }
@@ -159,13 +165,13 @@ fun SettingsScreen(
                                 onClick = viewModel::addNearbyCompanyBssids,
                                 enabled = companySsid != null,
                                 modifier = Modifier.fillMaxWidth()
-                            ) { Text("지금 보이는 ${companySsid ?: "회사"} AP 등록") }
+                            ) { Text(s.registerVisibleAp(companySsid ?: s.office)) }
                         }
                     }
 
                     RuleCard(
                         icon = Icons.Filled.Bluetooth,
-                        title = "회사 비콘(BLE) 병행 감지"
+                        title = s.beaconTitle
                     ) {
                         BeaconEditor(
                             enabled = bleEnabled,
@@ -180,7 +186,7 @@ fun SettingsScreen(
                 1 -> SettingsTabColumn {
                     RuleCard(
                         icon = Icons.AutoMirrored.Filled.DirectionsWalk,
-                        title = "자리비움 인정 기준(분)"
+                        title = s.absenceThresholdTitle
                     ) {
                         AbsenceThresholdEditor(
                             minutes = absenceThresholdMinutes,
@@ -190,7 +196,7 @@ fun SettingsScreen(
 
                     RuleCard(
                         icon = Icons.AutoMirrored.Filled.Logout,
-                        title = "자동 퇴근 처리"
+                        title = s.autoLeaveTitle
                     ) {
                         AutoLeaveEditor(
                             afterAwayMinutes = autoLeaveAfterAwayMinutes,
@@ -202,7 +208,7 @@ fun SettingsScreen(
 
                     RuleCard(
                         icon = Icons.Filled.AccessTime,
-                        title = "퇴근 시각 마진"
+                        title = s.leaveMarginTitle
                     ) {
                         LeaveMarginEditor(
                             minutes = leaveMarginMinutes,
@@ -212,7 +218,7 @@ fun SettingsScreen(
 
                     RuleCard(
                         icon = Icons.Filled.Restaurant,
-                        title = "점심시간"
+                        title = s.lunchTitle
                     ) {
                         LunchWindowEditor(
                             startMinute = lunchStartMinute,
@@ -223,7 +229,7 @@ fun SettingsScreen(
 
                     RuleCard(
                         icon = Icons.Filled.BeachAccess,
-                        title = "반차 시간대"
+                        title = s.halfDayTitle
                     ) {
                         HalfDayWindowEditor(
                             amStartMinute = halfAmStartMinute,
@@ -237,14 +243,14 @@ fun SettingsScreen(
 
                     RuleCard(
                         icon = Icons.Filled.Weekend,
-                        title = "주말(토·일) 표시"
+                        title = s.weekendTitle
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(if (showWeekend) "표시함" else "숨김")
+                            Text(if (showWeekend) s.shown else s.hidden)
                             Switch(checked = showWeekend, onCheckedChange = viewModel::setShowWeekend)
                         }
                     }
@@ -254,13 +260,23 @@ fun SettingsScreen(
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(s.languageCardTitle, style = MaterialTheme.typography.titleSmall)
+                            }
+                            LanguageSelector(current = language, onSelect = viewModel::setLanguage)
+                        }
+                    }
+
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Text("근거 문서", style = MaterialTheme.typography.titleSmall)
+                                Text(s.policyDocCardTitle, style = MaterialTheme.typography.titleSmall)
                             }
                             Button(
                                 onClick = onOpenPolicyDocument,
                                 modifier = Modifier.fillMaxWidth()
-                            ) { Text("가산 연구소 운영 방안 보기") }
+                            ) { Text(s.viewPolicy) }
                         }
                     }
 
@@ -268,7 +284,7 @@ fun SettingsScreen(
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Icon(Icons.Filled.Save, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Text("데이터 백업", style = MaterialTheme.typography.titleSmall)
+                                Text(s.backupCardTitle, style = MaterialTheme.typography.titleSmall)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
@@ -277,14 +293,14 @@ fun SettingsScreen(
                                         exportLauncher.launch(fileName)
                                     },
                                     modifier = Modifier.weight(1f)
-                                ) { Text("백업 저장") }
+                                ) { Text(s.backupSave) }
                                 OutlinedButton(
                                     onClick = { importLauncher.launch(arrayOf("application/json")) },
                                     modifier = Modifier.weight(1f)
-                                ) { Text("백업 복원") }
+                                ) { Text(s.backupRestore) }
                             }
                             Text(
-                                "기록은 백업과 별개로 앱 내부 로그에 자동 저장됩니다. 재설치·DB 손상으로 기록이 사라져도 아래 버튼으로 되살릴 수 있습니다.",
+                                s.backupRecoveryNote,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -294,13 +310,87 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    if (recoverableCount > 0) "기록 로그에서 복구 (${recoverableCount}건)"
-                                    else "복구할 기록 없음"
+                                    if (recoverableCount > 0) s.recoverFromLog(recoverableCount)
+                                    else s.noRecoverable
                                 )
                             }
                         }
                     }
+
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Filled.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                Text(s.resetCardTitle, style = MaterialTheme.typography.titleSmall)
+                            }
+                            Text(
+                                s.resetDescription,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                onClick = { showResetDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) { Text(s.resetButton) }
+                        }
+                    }
                 }
+            }
+
+            if (showResetDialog) {
+                AlertDialog(
+                    onDismissRequest = { showResetDialog = false },
+                    icon = { Icon(Icons.Filled.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    title = { Text(s.resetCardTitle) },
+                    text = { Text(s.resetDialogMessage) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            viewModel.resetAllData()
+                            showResetDialog = false
+                        }) { Text(s.resetButton, color = MaterialTheme.colorScheme.error) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showResetDialog = false }) { Text(s.cancel) }
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** A read-only field that opens a menu of the three language choices, saving immediately on pick —
+ * same auto-save-on-select pattern as the duration dropdowns. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LanguageSelector(current: AppLanguage, onSelect: (AppLanguage) -> Unit) {
+    val s = LocalStrings.current
+    fun label(language: AppLanguage) = when (language) {
+        AppLanguage.SYSTEM -> s.languageSystem
+        AppLanguage.KOREAN -> s.languageKorean
+        AppLanguage.ENGLISH -> s.languageEnglish
+    }
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = label(current),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(s.languageCardTitle) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            AppLanguage.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(label(option)) },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    }
+                )
             }
         }
     }
@@ -342,23 +432,13 @@ private fun RuleCard(
 private val ABSENCE_THRESHOLD_OPTIONS_MINUTES =
     (10..60 step 10) + (80..120 step 20) + (150..180 step 30)
 
-private fun formatThresholdLabel(minutes: Int): String {
-    val hours = minutes / 60
-    val mins = minutes % 60
-    return when {
-        hours == 0 -> "${minutes}분"
-        mins == 0 -> "${hours}시간"
-        else -> "${hours}시간 ${mins}분"
-    }
-}
-
 /** A fixed set of choices tapped and saved immediately (no free-text, no debounce) — picking one
  * is always a complete, valid value, so there's no "still mid-edit" state that a debounced
  * auto-save could flush too early or lose if the app is closed before the delay elapses. */
 @Composable
 private fun AbsenceThresholdEditor(minutes: Int, onSave: (Int) -> Unit) {
     MinutesDropdown(
-        label = "자리비움 인정 기준",
+        label = LocalStrings.current.absenceThresholdLabel,
         minutes = minutes,
         options = ABSENCE_THRESHOLD_OPTIONS_MINUTES.toList(),
         onSave = onSave
@@ -373,14 +453,15 @@ private val LEAVE_MARGIN_OPTIONS_MINUTES = (0..10).toList()
  * 찍히는 걸 보정. 자리 이탈 후 남는 전파 꼬리를 사용자가 직접 조절하는 값. */
 @Composable
 private fun LeaveMarginEditor(minutes: Int, onSave: (Int) -> Unit) {
+    val s = LocalStrings.current
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            "자리를 떠도 신호가 몇 분 더 잡혀 퇴근이 늦게 찍힙니다. 그만큼 앞당겨 기록합니다. (0분이면 보정 안 함)",
+            s.leaveMarginDescription,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         MinutesDropdown(
-            label = "퇴근 시각 앞당김",
+            label = s.leaveMarginPickerLabel,
             minutes = minutes,
             options = LEAVE_MARGIN_OPTIONS_MINUTES,
             onSave = onSave
@@ -392,6 +473,7 @@ private fun LeaveMarginEditor(minutes: Int, onSave: (Int) -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MinutesDropdown(label: String, minutes: Int, options: List<Int>, onSave: (Int) -> Unit) {
+    val s = LocalStrings.current
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -399,7 +481,7 @@ private fun MinutesDropdown(label: String, minutes: Int, options: List<Int>, onS
         modifier = Modifier.padding(top = 4.dp)
     ) {
         OutlinedTextField(
-            value = formatThresholdLabel(minutes),
+            value = s.durationLabel(minutes),
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
@@ -411,7 +493,7 @@ private fun MinutesDropdown(label: String, minutes: Int, options: List<Int>, onS
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(formatThresholdLabel(option)) },
+                    text = { Text(s.durationLabel(option)) },
                     onClick = {
                         onSave(option)
                         expanded = false
@@ -437,21 +519,22 @@ private fun AutoLeaveEditor(
     onSaveWorkEndMinute: (Int) -> Unit
 ) {
     var showEndPicker by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            "자리비움이 아래 기준에 닿으면 퇴근으로 확정합니다. 퇴근 시각은 자리비움이 시작된 시각으로 기록되고, 그 전에 회사 와이파이가 다시 잡히면 자리비움으로 끝납니다.",
+            s.autoLeaveDescription,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         MinutesDropdown(
-            label = "자리비움 지속 시간",
+            label = s.awayDurationLabel,
             minutes = afterAwayMinutes,
             options = AUTO_LEAVE_OPTIONS_MINUTES,
             onSave = onSaveAfterAwayMinutes
         )
         PickerField(
-            label = "근무 인정 시간 종료",
+            label = s.workEndLabel,
             value = formatMinuteOfDayToHHmm(workEndMinute),
             icon = Icons.Filled.AccessTime,
             onClick = { showEndPicker = true },
@@ -466,7 +549,7 @@ private fun AutoLeaveEditor(
             is24Hour = true
         )
         TimePickerDialog(
-            title = "근무 인정 시간 종료",
+            title = s.workEndLabel,
             onDismiss = { showEndPicker = false },
             onConfirm = {
                 onSaveWorkEndMinute(state.hour * 60 + state.minute)
@@ -483,17 +566,18 @@ private fun AutoLeaveEditor(
 private fun LunchWindowEditor(startMinute: Int, endMinute: Int, onSave: (Int, Int) -> Unit) {
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         PickerField(
-            label = "시작",
+            label = s.startLabel,
             value = formatMinuteOfDayToHHmm(startMinute),
             icon = Icons.Filled.AccessTime,
             onClick = { showStartPicker = true },
             modifier = Modifier.weight(1f)
         )
         PickerField(
-            label = "종료",
+            label = s.endLabel,
             value = formatMinuteOfDayToHHmm(endMinute),
             icon = Icons.Filled.AccessTime,
             onClick = { showEndPicker = true },
@@ -504,7 +588,7 @@ private fun LunchWindowEditor(startMinute: Int, endMinute: Int, onSave: (Int, In
     if (showStartPicker) {
         val state = rememberTimePickerState(initialHour = startMinute / 60, initialMinute = startMinute % 60, is24Hour = true)
         TimePickerDialog(
-            title = "시작 시각 선택",
+            title = s.startTimePickerTitle,
             onDismiss = { showStartPicker = false },
             onConfirm = {
                 val newStart = state.hour * 60 + state.minute
@@ -516,7 +600,7 @@ private fun LunchWindowEditor(startMinute: Int, endMinute: Int, onSave: (Int, In
     if (showEndPicker) {
         val state = rememberTimePickerState(initialHour = endMinute / 60, initialMinute = endMinute % 60, is24Hour = true)
         TimePickerDialog(
-            title = "종료 시각 선택",
+            title = s.endTimePickerTitle,
             onDismiss = { showEndPicker = false },
             onConfirm = {
                 val newEnd = state.hour * 60 + state.minute
@@ -542,19 +626,20 @@ private fun HalfDayWindowEditor(
     onSaveAm: (Int, Int) -> Unit,
     onSavePm: (Int, Int) -> Unit
 ) {
+    val s = LocalStrings.current
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            "연구소 운영 방안엔 연차/반차 규정이 없어 일반 관행을 기본값으로 둡니다. 연차는 오전 시작~오후 종료 전체로 계산됩니다.",
+            s.halfDayDescription,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Text("오전 반차", style = MaterialTheme.typography.labelMedium)
+        Text(s.leaveHalfAm, style = MaterialTheme.typography.labelMedium)
         TimeRangeRow(
             startMinute = amStartMinute,
             endMinute = amEndMinute,
             onSave = onSaveAm
         )
-        Text("오후 반차", style = MaterialTheme.typography.labelMedium)
+        Text(s.leaveHalfPm, style = MaterialTheme.typography.labelMedium)
         TimeRangeRow(
             startMinute = pmStartMinute,
             endMinute = pmEndMinute,
@@ -570,17 +655,18 @@ private fun HalfDayWindowEditor(
 private fun TimeRangeRow(startMinute: Int, endMinute: Int, onSave: (Int, Int) -> Unit) {
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         PickerField(
-            label = "시작",
+            label = s.startLabel,
             value = formatMinuteOfDayToHHmm(startMinute),
             icon = Icons.Filled.AccessTime,
             onClick = { showStartPicker = true },
             modifier = Modifier.weight(1f)
         )
         PickerField(
-            label = "종료",
+            label = s.endLabel,
             value = formatMinuteOfDayToHHmm(endMinute),
             icon = Icons.Filled.AccessTime,
             onClick = { showEndPicker = true },
@@ -591,7 +677,7 @@ private fun TimeRangeRow(startMinute: Int, endMinute: Int, onSave: (Int, Int) ->
     if (showStartPicker) {
         val state = rememberTimePickerState(initialHour = startMinute / 60, initialMinute = startMinute % 60, is24Hour = true)
         TimePickerDialog(
-            title = "시작 시각 선택",
+            title = s.startTimePickerTitle,
             onDismiss = { showStartPicker = false },
             onConfirm = {
                 val newStart = state.hour * 60 + state.minute
@@ -603,7 +689,7 @@ private fun TimeRangeRow(startMinute: Int, endMinute: Int, onSave: (Int, Int) ->
     if (showEndPicker) {
         val state = rememberTimePickerState(initialHour = endMinute / 60, initialMinute = endMinute % 60, is24Hour = true)
         TimePickerDialog(
-            title = "종료 시각 선택",
+            title = s.endTimePickerTitle,
             onDismiss = { showEndPicker = false },
             onConfirm = {
                 val newEnd = state.hour * 60 + state.minute
@@ -632,6 +718,7 @@ private fun BeaconEditor(
     onClear: () -> Unit
 ) {
     val context = LocalContext.current
+    val s = LocalStrings.current
     var showSearch by remember { mutableStateOf(false) }
     var enableAfterGrant by remember { mutableStateOf(false) }
     var openSearchAfterGrant by remember { mutableStateOf(false) }
@@ -647,7 +734,7 @@ private fun BeaconEditor(
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            "와이파이가 안 잡혀도(예: 와이파이 끄고 LTE 사용) 자리 근처 비콘으로 회사를 감지합니다.",
+            s.beaconDescription,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -656,7 +743,7 @@ private fun BeaconEditor(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(if (enabled) "사용함" else "사용 안 함")
+            Text(if (enabled) s.on else s.off)
             Switch(
                 checked = enabled,
                 onCheckedChange = { want ->
@@ -670,7 +757,7 @@ private fun BeaconEditor(
             )
         }
         Text(
-            beaconId?.let { "등록된 비콘: $it" } ?: "등록된 비콘 없음",
+            beaconId?.let { s.registeredBeacon(it) } ?: s.noRegisteredBeacon,
             style = MaterialTheme.typography.bodyMedium,
             color = if (beaconId == null && enabled) {
                 MaterialTheme.colorScheme.error
@@ -689,9 +776,9 @@ private fun BeaconEditor(
                     }
                 },
                 modifier = Modifier.weight(1f)
-            ) { Text("주변 비콘 검색") }
+            ) { Text(s.searchNearbyBeacon) }
             if (beaconId != null) {
-                TextButton(onClick = onClear) { Text("등록 해제") }
+                TextButton(onClick = onClear) { Text(s.unregister) }
             }
         }
     }
@@ -717,6 +804,7 @@ private fun BeaconEditor(
 @Composable
 private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val s = LocalStrings.current
     var tokens by remember { mutableStateOf<List<String>>(emptyList()) }
     var scanning by remember { mutableStateOf(true) }
     var noBluetooth by remember { mutableStateOf(false) }
@@ -733,7 +821,7 @@ private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("주변 비콘 검색") },
+        title = { Text(s.searchNearbyBeacon) },
         text = {
             when {
                 scanning -> Row(
@@ -741,14 +829,14 @@ private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    Text("검색 중...")
+                    Text(s.searching)
                 }
                 noBluetooth -> Text(
-                    "블루투스가 꺼져 있습니다. 블루투스를 켜고 다시 시도하세요.",
+                    s.bluetoothOff,
                     color = MaterialTheme.colorScheme.error
                 )
                 tokens.isEmpty() -> Text(
-                    "주변에서 회사 비콘을 찾지 못했습니다. 비콘(노트북·ESP32)이 켜져 있는지 확인하세요.",
+                    s.noBeaconFound,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
@@ -765,6 +853,6 @@ private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text(s.close) } }
     )
 }

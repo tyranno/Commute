@@ -47,6 +47,7 @@ private const val POLICY_ASSET_NAME = "가산연구소_운영방안_20220923.pdf
 @Composable
 fun PolicyDocumentScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
+    val s = LocalStrings.current
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(Unit) {
@@ -56,10 +57,10 @@ fun PolicyDocumentScreen(onBack: () -> Unit = {}) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("가산 연구소 운영 방안") },
+                title = { Text(s.policyTitle) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 }
             )
@@ -80,7 +81,7 @@ fun PolicyDocumentScreen(onBack: () -> Unit = {}) {
             ) {
                 Image(
                     bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "가산 연구소 운영 방안 문서",
+                    contentDescription = s.policyDocDesc,
                     contentScale = ContentScale.FillWidth,
                     modifier = Modifier
                         .fillMaxWidth()

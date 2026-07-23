@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.commute.app.AppLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -36,7 +37,12 @@ class SettingsRepository(private val context: Context) {
         val HALF_AM_END_MINUTE = intPreferencesKey("half_am_end_minute")
         val HALF_PM_START_MINUTE = intPreferencesKey("half_pm_start_minute")
         val HALF_PM_END_MINUTE = intPreferencesKey("half_pm_end_minute")
+        val LANGUAGE = stringPreferencesKey("language")
     }
+
+    /** Selected UI language. [AppLanguage.SYSTEM] (the default) follows the device — Korean unless
+     * the device language is English. Stored as the language tag; unknown/absent → SYSTEM. */
+    val language: Flow<AppLanguage> = context.dataStore.data.map { AppLanguage.fromTag(it[Keys.LANGUAGE]) }
 
     val companySsid: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_SSID] }
 
@@ -218,6 +224,10 @@ class SettingsRepository(private val context: Context) {
             it[Keys.HALF_PM_START_MINUTE] = startMinute
             it[Keys.HALF_PM_END_MINUTE] = endMinute
         }
+    }
+
+    suspend fun setLanguage(language: AppLanguage) {
+        context.dataStore.edit { it[Keys.LANGUAGE] = language.tag }
     }
 
     companion object {

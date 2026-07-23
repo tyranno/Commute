@@ -7,26 +7,30 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.commute.app.R
+import com.commute.app.Strings
 
 const val MONITOR_CHANNEL_ID = "commute_monitor"
 const val EVENT_CHANNEL_ID = "commute_events"
 const val MONITOR_NOTIFICATION_ID = 1
 private const val EVENT_NOTIFICATION_ID = 1000
 
-fun ensureNotificationChannels(context: Context) {
+fun ensureNotificationChannels(context: Context, strings: Strings) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val manager = context.getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(
         NotificationChannel(
             MONITOR_CHANNEL_ID,
-            "출퇴근 감지 서비스",
+            strings.channelMonitorName,
             NotificationManager.IMPORTANCE_MIN
-        )
+        // The always-on foreground-service notification must never contribute a launcher badge —
+        // it's a persistent status line, not a new event. Only the event channel badges, and that
+        // one is cleared on app entry.
+        ).apply { setShowBadge(false) }
     )
     manager.createNotificationChannel(
         NotificationChannel(
             EVENT_CHANNEL_ID,
-            "출퇴근 기록 알림",
+            strings.channelEventName,
             NotificationManager.IMPORTANCE_DEFAULT
         )
     )
@@ -54,4 +58,12 @@ fun showEventNotification(context: Context, title: String, text: String) {
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .build()
     NotificationManagerCompat.from(context).notify(EVENT_NOTIFICATION_ID, notification)
+}
+
+/** Clears the event notification so opening the app dismisses the launcher badge it produced.
+ * setAutoCancel only fires when the user *taps* the notification — someone who just opens the
+ * app from its icon leaves the record notification (and its badge) sitting there forever. Call
+ * this whenever the app comes to the foreground so entering to check clears the badge. */
+fun clearEventNotifications(context: Context) {
+    NotificationManagerCompat.from(context).cancel(EVENT_NOTIFICATION_ID)
 }
