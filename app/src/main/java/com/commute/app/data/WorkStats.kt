@@ -42,8 +42,114 @@ data class DailyWorkStat(
     val rawSpanMinutes: Long = workedMinutes,
     val firstArriveAt: Long? = null,
     val lastLeaveAt: Long? = null,
-    val open: Boolean = false
-)
+    val open: Boolean = false,
+    /** Declared 연차/반차/외출 credit for this day (see [mergeLeaveStats]), capped at one full
+     * standard day. Kept separate from [workedMinutes] so the chart can show RF attendance and
+     * declared leave distinctly, while totals/overtime use [creditedMinutes]. */
+    val leaveMinutes: Long = 0
+) {
+    /** RF-detected worked time plus declared leave credit — the number that counts toward the
+     * daily 8-hour requirement and weekly totals. */
+    val creditedMinutes: Long get() = workedMinutes + leaveMinutes
+}
+
+/** 하루 표준 근무 시간(분) — 가산 연구소 운영 방안의 일 8시간(주 40시간) 기준. 초과근무는 하루 실
+ * 근무(연차/반차/외출 크레딧 포함)에서 이 값을 뺀 합계로 계산한다. */
+const val DAILY_REQUIRED_MINUTES = 8 * 60L
+
+/**
+ * Work-time credit a single leave contributes: a full 연차 is a standard 8-hour day, a 반차 is
+ * half of that, and an 외출 counts for its own duration (approved-outing → 근무 인정).
+ *
+ * 연차/반차 credit is *already* net of lunch: [DAILY_REQUIRED_MINUTES] (8h) is the standard day
+ * *after* the unpaid lunch is taken out, so a full day = 480 and a half = 240 both exclude lunch by
+ * definition — subtracting it again would double-deduct and make 오전 반차+오후 반차 read as less
+ * than a full 연차. An 외출's credit is the raw declared range, though, so any part of it that falls
+ * inside the configured lunch window is removed here — being out over lunch isn't paid work, same as
+ * an RF-present session has its lunch subtracted in [computeDailyWorkStats].
+ */
+fun leaveCreditMinutes(
+    type: LeaveType,
+    startMinute: Int?,
+    endMinute: Int?,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int
+): Long = when (type) {
+    LeaveType.ANNUAL -> DAILY_REQUIRED_MINUTES
+    LeaveType.HALF_AM, LeaveType.HALF_PM -> DAILY_REQUIRED_MINUTES / 2
+    LeaveType.OUTING ->
+        if (startMinute != null && endMinute != null && endMinute > startMinute) {
+            val gross = (endMinute - startMinute).toLong()
+            val lunch = minuteWindowOverlap(startMinute, endMinute, lunchStartMinute, lunchEndMinute)
+            (gross - lunch).coerceAtLeast(0)
+        } else 0
+}
+
+/** Overlap, in minutes, between the minute-of-day ranges [aStart, aEnd) and [bStart, bEnd) — used
+ * to strip an 외출's lunch portion. Zero if the lunch window is empty/invalid or they don't touch. */
+private fun minuteWindowOverlap(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Long {
+    if (bStart >= bEnd) return 0
+    return (minOf(aEnd, bEnd) - maxOf(aStart, bStart)).coerceAtLeast(0).toLong()
+}
+
+/**
+ * Folds declared leave credit into per-day [DailyWorkStat]s. A day with only leave and no RF
+ * attendance (a plain 연차) has no ARRIVE/LEAVE, so [computeDailyWorkStats] emits nothing for it —
+ * those days are added here so they still count toward totals and get a chart bar. Same-day leaves
+ * sum, but the credit is capped at one full standard day so 연차+반차 can't read as more than 8h.
+ */
+fun mergeLeaveStats(
+    base: List<DailyWorkStat>,
+    leaves: List<LeaveEntry>,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int
+): List<DailyWorkStat> {
+    if (leaves.isEmpty()) return base
+    val creditByDay = leaves
+        .groupBy { startOfDay(it.date) }
+        .mapValues { (_, dayLeaves) ->
+            dayLeaves.sumOf { leaveCreditMinutes(it.type, it.startMinute, it.endMinute, lunchStartMinute, lunchEndMinute) }
+                .coerceAtMost(DAILY_REQUIRED_MINUTES)
+        }
+    val byDay = base.associateBy { it.dayStart }.toMutableMap()
+    for ((day, credit) in creditByDay) {
+        val existing = byDay[day]
+        byDay[day] = existing?.copy(leaveMinutes = credit)
+            ?: DailyWorkStat(dayStart = day, workedMinutes = 0, leaveMinutes = credit)
+    }
+    return byDay.values.sortedBy { it.dayStart }
+}
+
+/**
+ * Signed over/under time for the days in [weekStart, weekStart+7d) that actually have a record —
+ * Σ(그날 실근무(연차/반차/외출 포함) − 하루 8시간). Positive means net overtime, negative means
+ * short of the daily requirement. Only days with attendance or a leave count, so days simply not
+ * worked (weekends, untracked days) don't drag the figure negative. The current day ([nowMillis])
+ * is excluded — it's still in progress, so counting its not-yet-8h partial would drag the figure
+ * negative; overtime is only tallied through 어제(yesterday). See [overtimeMinutesTotal].
+ */
+fun overtimeMinutesForWeek(stats: List<DailyWorkStat>, weekStart: Long, nowMillis: Long): Long {
+    val weekEnd = weekStart + 7 * DAY_MILLIS
+    val today = startOfDay(nowMillis)
+    return stats
+        .filter { it.dayStart in weekStart until weekEnd && it.dayStart != today && (it.workedMinutes > 0 || it.leaveMinutes > 0) }
+        .sumOf { it.creditedMinutes - DAILY_REQUIRED_MINUTES }
+}
+
+/**
+ * Signed 초과근무(+)/부족(−) across ALL recorded days — the running cumulative total vs the daily
+ * 8시간 requirement, with no week bound. Same per-day rule as [overtimeMinutesForWeek]: only days
+ * with attendance or a declared leave count, so untracked days (weekends, days simply not worked)
+ * never drag it negative. The current day ([nowMillis]) is also excluded: it's a work-in-progress
+ * that hasn't reached 8h yet, so it would otherwise read as a large deficit — the total only counts
+ * completed days (어제까지). This is the "지금까지 전체 얼마나 오버했나" figure shown on the home card.
+ */
+fun overtimeMinutesTotal(stats: List<DailyWorkStat>, nowMillis: Long): Long {
+    val today = startOfDay(nowMillis)
+    return stats
+        .filter { it.dayStart != today && (it.workedMinutes > 0 || it.leaveMinutes > 0) }
+        .sumOf { it.creditedMinutes - DAILY_REQUIRED_MINUTES }
+}
 
 /**
  * Pairs ARRIVE→LEAVE events chronologically into sessions (exactly one per day — see

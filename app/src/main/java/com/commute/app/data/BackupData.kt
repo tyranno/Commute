@@ -28,16 +28,29 @@ data class BackupSettings(
     val workEndMinute: Int,
     val lunchStartMinute: Int,
     val lunchEndMinute: Int,
-    val showWeekend: Boolean
+    val showWeekend: Boolean,
+    val halfAmStartMinute: Int,
+    val halfAmEndMinute: Int,
+    val halfPmStartMinute: Int,
+    val halfPmEndMinute: Int
 )
 
-data class ParsedBackup(val settings: BackupSettings, val events: List<CommuteEvent>)
+data class ParsedBackup(
+    val settings: BackupSettings,
+    val events: List<CommuteEvent>,
+    val leaves: List<LeaveEntry>
+)
 
 /** Serializes all commute events plus durable settings into a JSON backup file the user can
  * save anywhere (Downloads, SD card, a synced cloud folder, ...) — since it lives outside the
  * app's private storage, it survives an uninstall/reinstall that would otherwise wipe the
  * Room DB and DataStore. */
-fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, exportedAt: Long): String {
+fun buildBackupJson(
+    events: List<CommuteEvent>,
+    leaves: List<LeaveEntry>,
+    settings: BackupSettings,
+    exportedAt: Long
+): String {
     val root = JSONObject()
     root.put("version", BACKUP_FORMAT_VERSION)
     root.put("exportedAt", exportedAt)
@@ -56,6 +69,10 @@ fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, export
             put("lunchStartMinute", settings.lunchStartMinute)
             put("lunchEndMinute", settings.lunchEndMinute)
             put("showWeekend", settings.showWeekend)
+            put("halfAmStartMinute", settings.halfAmStartMinute)
+            put("halfAmEndMinute", settings.halfAmEndMinute)
+            put("halfPmStartMinute", settings.halfPmStartMinute)
+            put("halfPmEndMinute", settings.halfPmEndMinute)
         }
     )
     root.put(
@@ -68,6 +85,22 @@ fun buildBackupJson(events: List<CommuteEvent>, settings: BackupSettings, export
                         put("ssid", event.ssid)
                         put("timestamp", event.timestamp)
                         put("endTimestamp", event.endTimestamp ?: JSONObject.NULL)
+                    }
+                )
+            }
+        }
+    )
+    root.put(
+        "leaves",
+        JSONArray().apply {
+            leaves.forEach { leave ->
+                put(
+                    JSONObject().apply {
+                        put("type", leave.type.name)
+                        put("date", leave.date)
+                        put("startMinute", leave.startMinute ?: JSONObject.NULL)
+                        put("endMinute", leave.endMinute ?: JSONObject.NULL)
+                        put("note", leave.note)
                     }
                 )
             }
@@ -112,7 +145,12 @@ fun parseBackupJson(json: String): ParsedBackup {
         workEndMinute = settingsJson.optInt("workEndMinute", SettingsRepository.DEFAULT_WORK_END_MINUTE),
         lunchStartMinute = settingsJson.optInt("lunchStartMinute", SettingsRepository.DEFAULT_LUNCH_START_MINUTE),
         lunchEndMinute = settingsJson.optInt("lunchEndMinute", SettingsRepository.DEFAULT_LUNCH_END_MINUTE),
-        showWeekend = settingsJson.optBoolean("showWeekend", false)
+        showWeekend = settingsJson.optBoolean("showWeekend", false),
+        // Absent in backups predating the leave feature — fall back to the general-convention defaults.
+        halfAmStartMinute = settingsJson.optInt("halfAmStartMinute", SettingsRepository.DEFAULT_HALF_AM_START_MINUTE),
+        halfAmEndMinute = settingsJson.optInt("halfAmEndMinute", SettingsRepository.DEFAULT_HALF_AM_END_MINUTE),
+        halfPmStartMinute = settingsJson.optInt("halfPmStartMinute", SettingsRepository.DEFAULT_HALF_PM_START_MINUTE),
+        halfPmEndMinute = settingsJson.optInt("halfPmEndMinute", SettingsRepository.DEFAULT_HALF_PM_END_MINUTE)
     )
     val eventsJson = root.getJSONArray("events")
     val events = (0 until eventsJson.length()).map { index ->
@@ -125,5 +163,18 @@ fun parseBackupJson(json: String): ParsedBackup {
             endTimestamp = if (eventJson.isNull("endTimestamp")) null else eventJson.getLong("endTimestamp")
         )
     }
-    return ParsedBackup(settings, events)
+    // Absent in backups predating the leave feature — an older file simply has no leaves.
+    val leavesJson = root.optJSONArray("leaves")
+    val leaves = if (leavesJson == null) emptyList() else (0 until leavesJson.length()).map { index ->
+        val leaveJson = leavesJson.getJSONObject(index)
+        LeaveEntry(
+            id = 0L,
+            type = LeaveType.valueOf(leaveJson.getString("type")),
+            date = leaveJson.getLong("date"),
+            startMinute = if (leaveJson.isNull("startMinute")) null else leaveJson.getInt("startMinute"),
+            endMinute = if (leaveJson.isNull("endMinute")) null else leaveJson.getInt("endMinute"),
+            note = leaveJson.optString("note", "")
+        )
+    }
+    return ParsedBackup(settings, events, leaves)
 }

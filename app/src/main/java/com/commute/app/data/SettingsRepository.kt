@@ -32,6 +32,10 @@ class SettingsRepository(private val context: Context) {
         val LUNCH_START_MINUTE = intPreferencesKey("lunch_start_minute")
         val LUNCH_END_MINUTE = intPreferencesKey("lunch_end_minute")
         val SHOW_WEEKEND = booleanPreferencesKey("show_weekend")
+        val HALF_AM_START_MINUTE = intPreferencesKey("half_am_start_minute")
+        val HALF_AM_END_MINUTE = intPreferencesKey("half_am_end_minute")
+        val HALF_PM_START_MINUTE = intPreferencesKey("half_pm_start_minute")
+        val HALF_PM_END_MINUTE = intPreferencesKey("half_pm_end_minute")
     }
 
     val companySsid: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_SSID] }
@@ -103,6 +107,16 @@ class SettingsRepository(private val context: Context) {
     /** 현황 탭 그래프에 토·일 막대를 표시할지 — 근무일이 보통 월~금이라 기본값은 숨김(false),
      * 주말에 근무한 경우 등 필요할 때만 켜서 확인하는 용도. */
     val showWeekend: Flow<Boolean> = context.dataStore.data.map { it[Keys.SHOW_WEEKEND] ?: false }
+
+    /** 오전 반차 시간대(자정 기준 분, 기본 09:00~13:00). 가산 연구소 운영 방안엔 연차/반차 규칙이 없어
+     * 일반 관행을 기본값으로 두되 사용자가 조정할 수 있게 한다. 그래프에서 오전 반차 막대 위치를 잡고,
+     * 연차 막대는 [halfAmStartMinute]~[halfPmEndMinute] 전체 구간으로 표시하는 데 쓴다. */
+    val halfAmStartMinute: Flow<Int> = context.dataStore.data.map { it[Keys.HALF_AM_START_MINUTE] ?: DEFAULT_HALF_AM_START_MINUTE }
+    val halfAmEndMinute: Flow<Int> = context.dataStore.data.map { it[Keys.HALF_AM_END_MINUTE] ?: DEFAULT_HALF_AM_END_MINUTE }
+
+    /** 오후 반차 시간대(자정 기준 분, 기본 14:00~18:00). */
+    val halfPmStartMinute: Flow<Int> = context.dataStore.data.map { it[Keys.HALF_PM_START_MINUTE] ?: DEFAULT_HALF_PM_START_MINUTE }
+    val halfPmEndMinute: Flow<Int> = context.dataStore.data.map { it[Keys.HALF_PM_END_MINUTE] ?: DEFAULT_HALF_PM_END_MINUTE }
 
     suspend fun setCompanySsid(ssid: String) {
         context.dataStore.edit { it[Keys.COMPANY_SSID] = ssid }
@@ -192,6 +206,20 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.SHOW_WEEKEND] = show }
     }
 
+    suspend fun setHalfDayAmWindow(startMinute: Int, endMinute: Int) {
+        context.dataStore.edit {
+            it[Keys.HALF_AM_START_MINUTE] = startMinute
+            it[Keys.HALF_AM_END_MINUTE] = endMinute
+        }
+    }
+
+    suspend fun setHalfDayPmWindow(startMinute: Int, endMinute: Int) {
+        context.dataStore.edit {
+            it[Keys.HALF_PM_START_MINUTE] = startMinute
+            it[Keys.HALF_PM_END_MINUTE] = endMinute
+        }
+    }
+
     companion object {
         const val DEFAULT_ABSENCE_THRESHOLD_MINUTES = 10
         const val DEFAULT_AUTO_LEAVE_AFTER_AWAY_MINUTES = 3 * 60 // 3시간
@@ -199,5 +227,9 @@ class SettingsRepository(private val context: Context) {
         const val DEFAULT_WORK_END_MINUTE = 22 * 60 // 22:00 — 근무 인정 시간 상한
         const val DEFAULT_LUNCH_START_MINUTE = 11 * 60 + 20 // 11:20 — 실제 운영 중인 점심시간 기준
         const val DEFAULT_LUNCH_END_MINUTE = 12 * 60 + 20 // 12:20
+        const val DEFAULT_HALF_AM_START_MINUTE = 9 * 60 // 09:00 — 오전 반차 기본 시작(운영 방안에 규정 없음, 일반 관행)
+        const val DEFAULT_HALF_AM_END_MINUTE = 13 * 60 // 13:00
+        const val DEFAULT_HALF_PM_START_MINUTE = 14 * 60 // 14:00 — 오후 반차 기본 시작
+        const val DEFAULT_HALF_PM_END_MINUTE = 18 * 60 // 18:00
     }
 }

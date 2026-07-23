@@ -8,4 +8,10 @@ class Converters {
 
     @TypeConverter
     fun toEventType(value: String): CommuteEventType = CommuteEventType.valueOf(value)
+
+    @TypeConverter
+    fun fromLeaveType(type: LeaveType): String = type.name
+
+    @TypeConverter
+    fun toLeaveType(value: String): LeaveType = LeaveType.valueOf(value)
 }

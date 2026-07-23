@@ -147,9 +147,15 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val todayWorkedMinutes by viewModel.todayWorkedMinutes.collectAsState()
     val todayWorkedMinutesIncludingLunch by viewModel.todayWorkedMinutesIncludingLunch.collectAsState()
     val weeklyWorkedMinutes by viewModel.weeklyWorkedMinutes.collectAsState()
+    val weeklyOvertimeMinutes by viewModel.weeklyOvertimeMinutes.collectAsState()
     val dailyWorkStats by viewModel.dailyWorkStats.collectAsState()
+    val leaves by viewModel.leaves.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
+    val halfAmStartMinute by viewModel.halfAmStartMinute.collectAsState()
+    val halfAmEndMinute by viewModel.halfAmEndMinute.collectAsState()
+    val halfPmStartMinute by viewModel.halfPmStartMinute.collectAsState()
+    val halfPmEndMinute by viewModel.halfPmEndMinute.collectAsState()
     val showWeekend by viewModel.showWeekend.collectAsState()
     val missingRecords by viewModel.missingRecords.collectAsState()
 
@@ -371,30 +377,46 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 TabRow(selectedTabIndex = selectedTab) {
                     Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("현황") })
                     Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("기록") })
+                    Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("연차·외출") })
                 }
                 when (selectedTab) {
                     0 -> StatusTab(
                         todayMinutes = todayWorkedMinutes,
                         todayMinutesIncludingLunch = todayWorkedMinutesIncludingLunch,
                         weeklyMinutes = weeklyWorkedMinutes,
+                        weeklyOvertimeMinutes = weeklyOvertimeMinutes,
                         dailyStats = dailyWorkStats,
                         events = allEvents,
+                        leaves = leaves,
                         companySsid = companySsid,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
+                        halfAmStartMinute = halfAmStartMinute,
+                        halfAmEndMinute = halfAmEndMinute,
+                        halfPmStartMinute = halfPmStartMinute,
+                        halfPmEndMinute = halfPmEndMinute,
                         showWeekend = showWeekend,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,
                         onDeleteEvent = viewModel::deleteEvent,
                         modifier = Modifier.weight(1f)
                     )
-                    else -> RecordsTab(
+                    1 -> RecordsTab(
                         events = allEvents,
                         missingRecords = missingRecords,
                         companySsid = companySsid,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,
                         onDeleteEvent = viewModel::deleteEvent,
+                        modifier = Modifier.weight(1f)
+                    )
+                    else -> LeaveTab(
+                        leaves = leaves,
+                        lunchStartMinute = lunchStartMinute,
+                        lunchEndMinute = lunchEndMinute,
+                        onAddLeave = viewModel::addLeave,
+                        onUpdateLeave = viewModel::updateLeave,
+                        onDeleteLeave = viewModel::deleteLeave,
                         modifier = Modifier.weight(1f)
                     )
                 }

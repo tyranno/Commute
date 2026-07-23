@@ -9,12 +9,15 @@ import com.commute.app.data.BackupSettings
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.DailyWorkStat
+import com.commute.app.data.LeaveEntry
 import com.commute.app.data.SettingsRepository
 import com.commute.app.data.MissingRecordFlag
 import com.commute.app.data.RecoveryJournal
 import com.commute.app.data.buildBackupJson
 import com.commute.app.data.computeDailyWorkStats
 import com.commute.app.data.findMissingRecords
+import com.commute.app.data.mergeLeaveStats
+import com.commute.app.data.overtimeMinutesForWeek
 import com.commute.app.data.parseBackupJson
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
@@ -37,7 +40,9 @@ import kotlinx.coroutines.withContext
 class CommuteViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settingsRepository = SettingsRepository(application)
-    private val dao = CommuteDatabase.getInstance(application).commuteDao()
+    private val database = CommuteDatabase.getInstance(application)
+    private val dao = database.commuteDao()
+    private val leaveDao = database.leaveDao()
 
     /** Append-only, DB-independent mirror of every event — the safety net that lets a wiped or
      * partially-lost history be rebuilt (see [RecoveryJournal] and [recoverFromJournal]). */
@@ -120,10 +125,23 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val showWeekend: StateFlow<Boolean> = settingsRepository.showWeekend
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    val halfAmStartMinute: StateFlow<Int> = settingsRepository.halfAmStartMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_HALF_AM_START_MINUTE)
+    val halfAmEndMinute: StateFlow<Int> = settingsRepository.halfAmEndMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_HALF_AM_END_MINUTE)
+    val halfPmStartMinute: StateFlow<Int> = settingsRepository.halfPmStartMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_HALF_PM_START_MINUTE)
+    val halfPmEndMinute: StateFlow<Int> = settingsRepository.halfPmEndMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_HALF_PM_END_MINUTE)
+
+    /** Declared 연차/반차/외출 records, newest first — the manual counterpart to [events]. */
+    val leaves: StateFlow<List<LeaveEntry>> = leaveDao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     /** Worked-minutes per day across all recorded history (not just this week), so the 현황
      * tab's chart can page back through past weeks — re-ticked every minute so "today" advances
      * while a session is still open. */
-    val dailyWorkStats: StateFlow<List<DailyWorkStat>> = combine(
+    private val baseDailyWorkStats: Flow<List<DailyWorkStat>> = combine(
         events,
         settingsRepository.lunchStartMinute,
         settingsRepository.lunchEndMinute,
@@ -132,30 +150,52 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     ) { allEvents, lunchStart, lunchEnd, absenceThreshold, _ ->
         computeDailyWorkStats(allEvents, lunchStart, lunchEnd, absenceThreshold, System.currentTimeMillis())
     }
+
+    val dailyWorkStats: StateFlow<List<DailyWorkStat>> = combine(
+        baseDailyWorkStats,
+        leaves,
+        settingsRepository.lunchStartMinute,
+        settingsRepository.lunchEndMinute
+    ) { base, leaveList, lunchStart, lunchEnd ->
+        mergeLeaveStats(base, leaveList, lunchStart, lunchEnd)
+    }
         // viewModelScope is Main.immediate, so without this the whole history is re-crunched on
         // the UI thread every minute — fine today, but it grows with every recorded day.
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Signed 초과근무(+)/부족(−) for the actual current week — daily 실근무(연차/반차/외출 포함)의
+     * 8시간 대비 합계. Recomputed whenever stats change (which includes the per-minute tick). */
+    val weeklyOvertimeMinutes: StateFlow<Long> = dailyWorkStats
+        .map { stats ->
+            val now = System.currentTimeMillis()
+            overtimeMinutesForWeek(stats, startOfWeek(now), now)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
     val todayWorkedMinutes: StateFlow<Long> = dailyWorkStats
-        .map { stats -> stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }?.workedMinutes ?: 0L }
+        .map { stats -> stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }?.creditedMinutes ?: 0L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
     /** Today's worked time with the lunch deduction added back — "how long was I actually
-     * present, lunch included" — for the 오늘 근무시간 tile's tap-to-toggle view. */
+     * present, lunch included" — for the 오늘 근무시간 tile's tap-to-toggle view. Leave credit is
+     * added on top so a 연차/반차 day reads the same here as it does in the total. */
     val todayWorkedMinutesIncludingLunch: StateFlow<Long> = dailyWorkStats
-        .map { stats -> stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }?.rawSpanMinutes ?: 0L }
+        .map { stats ->
+            stats.firstOrNull { it.dayStart == startOfDay(System.currentTimeMillis()) }
+                ?.let { it.rawSpanMinutes + it.leaveMinutes } ?: 0L
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
-    /** Total worked minutes for the actual current calendar week (월~일), regardless of which
-     * week the chart is currently paged to. */
+    /** Total credited minutes (실근무 + 연차/반차/외출) for the actual current calendar week (월~일),
+     * regardless of which week the chart is currently paged to. */
     val weeklyWorkedMinutes: StateFlow<Long> = dailyWorkStats
         .map { stats ->
             // Bounded at both ends: a mistyped future date used to add its hours to this week's
             // tile while contributing no bar to the chart, so the two disagreed.
             val weekStart = startOfWeek(System.currentTimeMillis())
             val weekEnd = weekStart + 7 * 24 * 60 * 60 * 1000L
-            stats.filter { it.dayStart in weekStart until weekEnd }.sumOf { it.workedMinutes }
+            stats.filter { it.dayStart in weekStart until weekEnd }.sumOf { it.creditedMinutes }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
@@ -252,6 +292,26 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepository.setShowWeekend(show) }
     }
 
+    fun setHalfDayAmWindow(startMinute: Int, endMinute: Int) {
+        viewModelScope.launch { settingsRepository.setHalfDayAmWindow(startMinute, endMinute) }
+    }
+
+    fun setHalfDayPmWindow(startMinute: Int, endMinute: Int) {
+        viewModelScope.launch { settingsRepository.setHalfDayPmWindow(startMinute, endMinute) }
+    }
+
+    fun addLeave(entry: LeaveEntry) {
+        viewModelScope.launch { leaveDao.insert(entry) }
+    }
+
+    fun updateLeave(entry: LeaveEntry) {
+        viewModelScope.launch { leaveDao.update(entry) }
+    }
+
+    fun deleteLeave(entry: LeaveEntry) {
+        viewModelScope.launch { leaveDao.delete(entry) }
+    }
+
     /** Fills in a record the service missed (e.g. wifi/permission hiccup, phone off). */
     fun addEvent(event: CommuteEvent) {
         viewModelScope.launch {
@@ -304,6 +364,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val allEvents = dao.getAllOnce()
+                val allLeaves = leaveDao.getAllOnce()
                 // Read straight from the repository rather than the StateFlows' .value — those
                 // only hold a value while something is subscribed, so a backup's correctness
                 // shouldn't depend on which screen happens to be composed right now.
@@ -319,16 +380,20 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                     workEndMinute = settingsRepository.workEndMinute.first(),
                     lunchStartMinute = settingsRepository.lunchStartMinute.first(),
                     lunchEndMinute = settingsRepository.lunchEndMinute.first(),
-                    showWeekend = settingsRepository.showWeekend.first()
+                    showWeekend = settingsRepository.showWeekend.first(),
+                    halfAmStartMinute = settingsRepository.halfAmStartMinute.first(),
+                    halfAmEndMinute = settingsRepository.halfAmEndMinute.first(),
+                    halfPmStartMinute = settingsRepository.halfPmStartMinute.first(),
+                    halfPmEndMinute = settingsRepository.halfPmEndMinute.first()
                 )
                 // Off the main thread: the SAF Uri can point at a cloud provider, so the write is
                 // potentially a network round-trip.
                 withContext(Dispatchers.IO) {
-                    val json = buildBackupJson(allEvents, settings, System.currentTimeMillis())
+                    val json = buildBackupJson(allEvents, allLeaves, settings, System.currentTimeMillis())
                     app.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
                         ?: throw IllegalStateException("파일을 열 수 없습니다")
                 }
-                Toast.makeText(app, "백업 완료 (${allEvents.size}건)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, "백업 완료 (기록 ${allEvents.size}건 · 연차/외출 ${allLeaves.size}건)", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(app, "백업 실패: ${e.message}", Toast.LENGTH_SHORT).show()
             }
@@ -352,6 +417,10 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                     parseBackupJson(json)
                 }
                 dao.replaceAll(parsed.events)
+                // Leaves are replaced wholesale alongside events — the backup is the authoritative
+                // snapshot, same as for events.
+                leaveDao.deleteAll()
+                leaveDao.insertAll(parsed.leaves)
                 // Fold the restored events into the journal (additive) so they're protected going
                 // forward too, without dropping journal entries the backup happened to omit.
                 withContext(Dispatchers.IO) { recoveryJournal.reconcile(dao.getAllOnce()) }
@@ -366,13 +435,15 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 settingsRepository.setWorkEndMinute(parsed.settings.workEndMinute)
                 settingsRepository.setLunchWindow(parsed.settings.lunchStartMinute, parsed.settings.lunchEndMinute)
                 settingsRepository.setShowWeekend(parsed.settings.showWeekend)
+                settingsRepository.setHalfDayAmWindow(parsed.settings.halfAmStartMinute, parsed.settings.halfAmEndMinute)
+                settingsRepository.setHalfDayPmWindow(parsed.settings.halfPmStartMinute, parsed.settings.halfPmEndMinute)
                 setMonitoringEnabled(parsed.settings.monitoringEnabled)
                 val apNote = if (parsed.settings.companyBssids.isEmpty() && parsed.settings.companySsid != null) {
                     " · 회사 AP 정보가 없어 이름만으로 감지합니다"
                 } else {
                     ""
                 }
-                Toast.makeText(app, "복원 완료 (${parsed.events.size}건)$apNote", Toast.LENGTH_LONG).show()
+                Toast.makeText(app, "복원 완료 (기록 ${parsed.events.size}건 · 연차/외출 ${parsed.leaves.size}건)$apNote", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
                 Toast.makeText(app, "복원 실패: ${e.message}", Toast.LENGTH_SHORT).show()
             }

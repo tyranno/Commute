@@ -4,6 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,26 +22,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -49,6 +50,8 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.drawText
@@ -58,7 +61,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
+import com.commute.app.data.DAILY_REQUIRED_MINUTES
 import com.commute.app.data.DailyWorkStat
+import com.commute.app.data.LeaveEntry
+import com.commute.app.data.LeaveType
 import com.commute.app.data.MissingRecordFlag
 import com.commute.app.data.MissingRecordType
 import com.commute.app.data.findMissingRecords
@@ -80,11 +86,17 @@ fun StatusTab(
     todayMinutes: Long,
     todayMinutesIncludingLunch: Long,
     weeklyMinutes: Long,
+    weeklyOvertimeMinutes: Long,
     dailyStats: List<DailyWorkStat>,
     events: List<CommuteEvent>,
+    leaves: List<LeaveEntry>,
     companySsid: String?,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
+    halfAmStartMinute: Int,
+    halfAmEndMinute: Int,
+    halfPmStartMinute: Int,
+    halfPmEndMinute: Int,
     showWeekend: Boolean,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
@@ -94,6 +106,18 @@ fun StatusTab(
     var selectedDay by remember { mutableStateOf<Long?>(null) }
     var weekOffset by remember { mutableStateOf(0) }
     var showTodayIncludingLunch by remember { mutableStateOf(false) }
+    // Tap-to-reveal 이번주 초과근무: not shown at rest, surfaced on tap then auto-hidden after 10초.
+    // Tapping again while it's shown reverts immediately; a fresh reveal bumps
+    // `overtimeRevealToken`, which restarts the auto-revert timer below.
+    var overtimeRevealToken by remember { mutableStateOf(0) }
+    var showTotalOvertime by remember { mutableStateOf(false) }
+    LaunchedEffect(overtimeRevealToken) {
+        if (overtimeRevealToken > 0) {
+            showTotalOvertime = true
+            delay(10_000)
+            showTotalOvertime = false
+        }
+    }
     val weekStart = startOfWeek(System.currentTimeMillis()) + weekOffset * WEEK_DAYS * DAY_MS
 
     Column(
@@ -107,13 +131,27 @@ fun StatusTab(
                 Modifier.padding(16.dp).fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatTile(
                         label = if (showTodayIncludingLunch) "오늘 근무시간 (점심 포함)" else "오늘 근무시간",
-                        valueMinutes = if (showTodayIncludingLunch) todayMinutesIncludingLunch else todayMinutes,
+                        valueText = formatMinutesAsHours(if (showTodayIncludingLunch) todayMinutesIncludingLunch else todayMinutes),
+                        modifier = Modifier.weight(1f),
                         onClick = { showTodayIncludingLunch = !showTodayIncludingLunch }
                     )
-                    StatTile("이번주 총 근무시간", weeklyMinutes)
+                    // Tap to briefly reveal 이번주 초과근무(이번주 기록 누적 +/−) for ~10초, then it reverts
+                    // back to 이번주 총 근무시간 on its own. Tapping again while shown reverts at once —
+                    // overtime isn't shown at rest to keep the card calm. Scoped to this week to match
+                    // the 이번주 총 근무시간 it toggles from — the same 이번주 기록 basis (오늘 제외).
+                    StatTile(
+                        label = if (showTotalOvertime) "이번주 초과근무" else "이번주 총 근무시간",
+                        valueText = if (showTotalOvertime) formatSignedMinutes(weeklyOvertimeMinutes)
+                            else formatMinutesAsHours(weeklyMinutes),
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            if (showTotalOvertime) showTotalOvertime = false
+                            else overtimeRevealToken++
+                        }
+                    )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
@@ -129,9 +167,14 @@ fun StatusTab(
                 }
                 WeeklyRangeChart(
                     stats = dailyStats,
+                    leaves = leaves,
                     weekStart = weekStart,
                     lunchStartMinute = lunchStartMinute,
                     lunchEndMinute = lunchEndMinute,
+                    halfAmStartMinute = halfAmStartMinute,
+                    halfAmEndMinute = halfAmEndMinute,
+                    halfPmStartMinute = halfPmStartMinute,
+                    halfPmEndMinute = halfPmEndMinute,
                     showWeekend = showWeekend,
                     onDayClick = { selectedDay = it },
                     onWeekChange = { delta -> weekOffset = (weekOffset + delta).coerceAtMost(0) },
@@ -142,10 +185,12 @@ fun StatusTab(
     }
 
     selectedDay?.let { day ->
+        val dayStat = dailyStats.firstOrNull { it.dayStart == day }
         DayDetailDialog(
             day = day,
             events = events,
-            workedMinutes = dailyStats.firstOrNull { it.dayStart == day }?.workedMinutes ?: 0L,
+            dayLeaves = leaves.filter { startOfDay(it.date) == day },
+            creditedMinutes = dayStat?.creditedMinutes ?: 0L,
             companySsid = companySsid,
             onAddEvent = onAddEvent,
             onUpdateEvent = onUpdateEvent,
@@ -170,39 +215,29 @@ fun RecordsTab(
     var addingEvent by remember { mutableStateOf(false) }
     var fixingFlag by remember { mutableStateOf<MissingRecordFlag?>(null) }
 
-    // Null bound = unrestricted on that side, so the default (both null) shows every record —
-    // 기록 탭 used to only ever show "this week" with no way to look further back.
-    var filterStart by remember { mutableStateOf<Long?>(null) }
-    var filterEnd by remember { mutableStateOf<Long?>(null) }
-    var showStartDatePicker by remember { mutableStateOf(false) }
-    var showEndDatePicker by remember { mutableStateOf(false) }
+    // Preset ranges instead of two hand-picked dates: one tap filters the list. The upper bound
+    // is always open (today is included); each preset only sets the lower bound. 전체 = show all.
+    var selectedRange by remember { mutableStateOf(DateRangePreset.ALL) }
+    val filterStart = selectedRange.startMillis(System.currentTimeMillis())
     val filteredEvents = events.filter { event ->
-        val day = startOfDay(event.timestamp)
-        (filterStart == null || day >= filterStart!!) && (filterEnd == null || day <= filterEnd!!)
+        filterStart == null || startOfDay(event.timestamp) >= filterStart
     }
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                PickerField(
-                    label = "시작일",
-                    value = filterStart?.let(::formatDateShort) ?: "전체",
-                    icon = Icons.Filled.CalendarToday,
-                    onClick = { showStartDatePicker = true },
-                    modifier = Modifier.weight(1f)
-                )
-                PickerField(
-                    label = "종료일",
-                    value = filterEnd?.let(::formatDateShort) ?: "전체",
-                    icon = Icons.Filled.CalendarToday,
-                    onClick = { showEndDatePicker = true },
-                    modifier = Modifier.weight(1f)
-                )
-                if (filterStart != null || filterEnd != null) {
-                    TextButton(onClick = { filterStart = null; filterEnd = null }) { Text("전체") }
+                DateRangePreset.values().forEach { preset ->
+                    FilterChip(
+                        selected = selectedRange == preset,
+                        onClick = { selectedRange = preset },
+                        label = { Text(preset.label) }
+                    )
                 }
             }
             if (missingRecords.isNotEmpty()) {
@@ -214,7 +249,7 @@ fun RecordsTab(
             if (filteredEvents.isEmpty()) {
                 Box(Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
                     Text(
-                        if (filterStart == null && filterEnd == null) "기록이 없습니다." else "이 기간에 기록이 없습니다.",
+                        if (selectedRange == DateRangePreset.ALL) "기록이 없습니다." else "이 기간에 기록이 없습니다.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -276,40 +311,31 @@ fun RecordsTab(
         )
     }
 
-    if (showStartDatePicker) {
-        val state = rememberDatePickerState(
-            initialSelectedDateMillis = localMidnightToUtcMillis(filterStart ?: startOfDay(System.currentTimeMillis()))
-        )
-        DatePickerDialog(
-            onDismissRequest = { showStartDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let { filterStart = utcMillisToLocalMidnight(it) }
-                    showStartDatePicker = false
-                }) { Text("확인") }
-            },
-            dismissButton = { TextButton(onClick = { showStartDatePicker = false }) { Text("취소") } }
-        ) { DatePicker(state = state) }
-    }
-    if (showEndDatePicker) {
-        val state = rememberDatePickerState(
-            initialSelectedDateMillis = localMidnightToUtcMillis(filterEnd ?: startOfDay(System.currentTimeMillis()))
-        )
-        DatePickerDialog(
-            onDismissRequest = { showEndDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let { filterEnd = utcMillisToLocalMidnight(it) }
-                    showEndDatePicker = false
-                }) { Text("확인") }
-            },
-            dismissButton = { TextButton(onClick = { showEndDatePicker = false }) { Text("취소") } }
-        ) { DatePicker(state = state) }
-    }
 }
 
-private fun formatDateShort(timestamp: Long): String =
-    SimpleDateFormat("M/d", Locale.getDefault()).format(Date(timestamp))
+/** Quick date-range filters for 기록 탭 — pick one instead of hand-entering start/end dates.
+ *  Each preset only bounds the past; the upper end stays open so today always shows. */
+private enum class DateRangePreset(val label: String) {
+    THIS_WEEK("이번주"),
+    TWO_WEEKS("최근 2주"),
+    THIS_MONTH("이번달"),
+    THREE_MONTHS("최근 3개월"),
+    SIX_MONTHS("최근 6개월"),
+    ALL("전체");
+
+    /** Inclusive lower bound as a local-midnight millis, or null for "no lower bound" (전체). */
+    fun startMillis(now: Long): Long? {
+        val cal = Calendar.getInstance().apply { timeInMillis = startOfDay(now) }
+        return when (this) {
+            THIS_WEEK -> startOfWeek(now)
+            TWO_WEEKS -> { cal.add(Calendar.DAY_OF_YEAR, -13); cal.timeInMillis }   // 오늘 포함 14일
+            THIS_MONTH -> { cal.set(Calendar.DAY_OF_MONTH, 1); cal.timeInMillis }
+            THREE_MONTHS -> { cal.add(Calendar.MONTH, -3); cal.timeInMillis }
+            SIX_MONTHS -> { cal.add(Calendar.MONTH, -6); cal.timeInMillis }
+            ALL -> null
+        }
+    }
+}
 
 /** Lists ARRIVE/LEAVE events missing their other half (see [findMissingRecords]) with a quick
  * "add the missing one" action per row — these are the same cases [computeDailyWorkStats]
@@ -358,13 +384,27 @@ private fun MissingRecordsBanner(flags: List<MissingRecordFlag>, onFix: (Missing
 }
 
 @Composable
-private fun StatTile(label: String, valueMinutes: Long, onClick: (() -> Unit)? = null) {
+private fun StatTile(
+    label: String,
+    valueText: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
     Column(
-        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+        modifier = modifier.then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(formatMinutesAsHours(valueMinutes), style = MaterialTheme.typography.headlineSmall)
+        // labelMedium + titleLarge (was labelLarge/headlineSmall): three tiles now share the row,
+        // so the smaller type keeps each label on ~one line and the values from crowding.
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(valueText, style = MaterialTheme.typography.titleLarge)
     }
+}
+
+/** Signed over/under total for the 초과근무 tile: leading +/− (0 has no sign). */
+private fun formatSignedMinutes(minutes: Long): String = when {
+    minutes == 0L -> "0분"
+    minutes > 0 -> "+${formatMinutesAsHours(minutes)}"
+    else -> "-${formatMinutesAsHours(-minutes)}"
 }
 
 /**
@@ -378,9 +418,14 @@ private fun StatTile(label: String, valueMinutes: Long, onClick: (() -> Unit)? =
 @Composable
 private fun WeeklyRangeChart(
     stats: List<DailyWorkStat>,
+    leaves: List<LeaveEntry>,
     weekStart: Long,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
+    halfAmStartMinute: Int,
+    halfAmEndMinute: Int,
+    halfPmStartMinute: Int,
+    halfPmEndMinute: Int,
     showWeekend: Boolean,
     onDayClick: (Long) -> Unit,
     onWeekChange: (Int) -> Unit,
@@ -394,8 +439,14 @@ private fun WeeklyRangeChart(
     val visibleDayCount = if (showWeekend) WEEK_DAYS else WEEK_DAYS - 2
     val days = (0 until visibleDayCount).map { weekStart + it * DAY_MS }
     val statByDay = stats.associateBy { it.dayStart }
+    val leavesByDay = leaves.groupBy { startOfDay(it.date) }
     val barColor = MaterialTheme.colorScheme.primary
     val lunchColor = MaterialTheme.colorScheme.tertiary
+    val leaveColor = MaterialTheme.colorScheme.secondary
+    // Warm amber for the 8시간 초과 portion of a bar — a fixed hue (not a theme role) so it reads
+    // clearly as "초과근무" and stays distinct from the blue bar, the lighter-blue lunch band, and
+    // the secondary-toned leave blocks in both light and dark themes.
+    val overtimeColor = Color(0xFFFFA726)
     val axisColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val density = LocalDensity.current
@@ -476,7 +527,49 @@ private fun WeeklyRangeChart(
             val slotWidth = chartWidth / days.size
             val barWidth = (slotWidth * 0.5f).coerceAtMost(maxBarWidthPx)
             val corner = CornerRadius(cornerPx, cornerPx)
+            val leaveStroke = Stroke(
+                width = 1.5.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f))
+            )
             days.forEachIndexed { index, day ->
+                val left = chartLeft + index * slotWidth + (slotWidth - barWidth) / 2f
+                val alpha = if (day == today) 1f else 0.55f
+
+                // Declared 연차/반차/외출 render as hollow (dashed, faintly-filled) blocks over their
+                // time-of-day window with a short label inside — "약간 빈 막대구간". Drawn before the
+                // worked bar and independent of it, so a leave-only day (no ARRIVE/LEAVE) still gets a
+                // bar, and a 반차's off-half sits beside the attended half's solid bar.
+                leavesByDay[day]?.forEach { leave ->
+                    val range = leaveMinuteRange(leave, halfAmStartMinute, halfAmEndMinute, halfPmStartMinute, halfPmEndMinute)
+                        ?: return@forEach
+                    val (startMin, endMin) = range
+                    if (endMin <= startMin) return@forEach
+                    val blockTop = yFor(endMin)
+                    val blockBottom = yFor(startMin).coerceAtLeast(blockTop + 6f)
+                    val rect = Rect(left, blockTop, left + barWidth, blockBottom)
+                    drawPath(
+                        Path().apply { addRoundRect(RoundRect(rect = rect, cornerRadius = corner)) },
+                        color = leaveColor.copy(alpha = alpha * 0.15f)
+                    )
+                    drawRoundRect(
+                        color = leaveColor.copy(alpha = alpha),
+                        topLeft = Offset(rect.left, rect.top),
+                        size = Size(rect.width, rect.height),
+                        cornerRadius = corner,
+                        style = leaveStroke
+                    )
+                    val measured = textMeasurer.measure(leaveShortLabel(leave.type), style = barTimeStyle)
+                    val maxX = (size.width - measured.size.width).coerceAtLeast(0f)
+                    val maxY = (size.height - measured.size.height).coerceAtLeast(0f)
+                    drawText(
+                        measured,
+                        topLeft = Offset(
+                            ((rect.left + rect.right) / 2f - measured.size.width / 2f).coerceIn(0f, maxX),
+                            ((rect.top + rect.bottom) / 2f - measured.size.height / 2f).coerceIn(0f, maxY)
+                        )
+                    )
+                }
+
                 val stat = statByDay[day]
                 val arriveAt = stat?.firstArriveAt ?: return@forEachIndexed
                 val departAt = if (stat.open) now else (stat.lastLeaveAt ?: return@forEachIndexed)
@@ -484,12 +577,27 @@ private fun WeeklyRangeChart(
                 val departMinute = minuteOfDay(departAt)
                 val top = yFor(departMinute)
                 val bottom = yFor(arriveMinute).coerceAtLeast(top + 4f)
-                val left = chartLeft + index * slotWidth + (slotWidth - barWidth) / 2f
-                val alpha = if (day == today) 1f else 0.55f
                 val path = Path().apply {
                     addRoundRect(RoundRect(rect = Rect(left, top, left + barWidth, bottom), cornerRadius = corner))
                 }
                 drawPath(path, color = barColor.copy(alpha = alpha))
+
+                // Distinguish worked time beyond the daily 8시간 requirement: paint the top segment
+                // of the bar (its last `overtime` worked-minutes before departure) in the 초과근무
+                // color. Lunch and long 자리비움 sit earlier in the day, so in practice the closing
+                // stretch of the bar is contiguous work — a good approximation of "which hours were
+                // overtime" without reconstructing the exact minute work crossed 8시간.
+                val overtimeMinutes = (stat.workedMinutes - DAILY_REQUIRED_MINUTES).coerceAtLeast(0)
+                if (overtimeMinutes > 0) {
+                    val otStartMinute = (departMinute - overtimeMinutes.toInt()).coerceAtLeast(arriveMinute)
+                    val otTop = yFor(departMinute)
+                    val otBottom = yFor(otStartMinute).coerceAtLeast(otTop + 2f)
+                    drawRect(
+                        color = overtimeColor.copy(alpha = alpha),
+                        topLeft = Offset(left, otTop),
+                        size = Size(barWidth, otBottom - otTop)
+                    )
+                }
 
                 // Times annotated directly on the bar — arrival just under its bottom edge,
                 // departure just above its top edge — so the chart answers "몇 시에 출퇴근했나"
@@ -555,7 +663,8 @@ private fun WeeklyRangeChart(
 private fun DayDetailDialog(
     day: Long,
     events: List<CommuteEvent>,
-    workedMinutes: Long,
+    dayLeaves: List<LeaveEntry>,
+    creditedMinutes: Long,
     companySsid: String?,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
@@ -580,7 +689,22 @@ private fun DayDetailDialog(
                         "퇴근",
                         lastLeave?.let { formatTimeOnly(it.timestamp) } ?: if (firstArrive != null) "근무 중" else "-"
                     )
-                    DaySummaryItem("근무시간", formatMinutesAsHours(workedMinutes))
+                    // Includes 연차/반차/외출 credit so the number matches the totals and the chart.
+                    DaySummaryItem("인정시간", formatMinutesAsHours(creditedMinutes))
+                }
+                if (dayLeaves.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        dayLeaves.forEach { leave ->
+                            val extra = if (leave.type == LeaveType.OUTING && leave.startMinute != null && leave.endMinute != null) {
+                                " (${com.commute.app.data.formatMinuteOfDayToHHmm(leave.startMinute)}~${com.commute.app.data.formatMinuteOfDayToHHmm(leave.endMinute)})"
+                            } else ""
+                            Text(
+                                "· ${leave.type.label}$extra",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
                 }
                 TextButton(onClick = { addingEvent = true }, modifier = Modifier.align(Alignment.End)) {
                     Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -694,3 +818,32 @@ private fun formatEventTimeRange(event: CommuteEvent): String {
 
 private fun formatTimeOnly(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
+
+/** The time-of-day window (minutes-since-midnight) a leave occupies on the chart: the configured
+ * 반차 windows for half-days, both spans for a full 연차, and the recorded range for an 외출.
+ * Null when an 외출 has no times set (shouldn't happen via the editor). */
+private fun leaveMinuteRange(
+    leave: LeaveEntry,
+    halfAmStart: Int,
+    halfAmEnd: Int,
+    halfPmStart: Int,
+    halfPmEnd: Int
+): Pair<Int, Int>? = when (leave.type) {
+    LeaveType.ANNUAL -> halfAmStart to halfPmEnd
+    LeaveType.HALF_AM -> halfAmStart to halfAmEnd
+    LeaveType.HALF_PM -> halfPmStart to halfPmEnd
+    LeaveType.OUTING -> {
+        val start = leave.startMinute
+        val end = leave.endMinute
+        if (start != null && end != null) start to end else null
+    }
+}
+
+/** Short in-bar label — the narrow bar can't hold "오전 반차" on one line, so half-days wrap to two.
+ * The full label is shown in the 연차·외출 tab and the day-detail dialog. */
+private fun leaveShortLabel(type: LeaveType): String = when (type) {
+    LeaveType.ANNUAL -> "연차"
+    LeaveType.HALF_AM -> "오전\n반차"
+    LeaveType.HALF_PM -> "오후\n반차"
+    LeaveType.OUTING -> "외출"
+}
