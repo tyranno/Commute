@@ -117,6 +117,55 @@ fun autoLeaveDue(
 }
 
 /**
+ * The auto-leave 퇴근 that should be rewritten as 자리비움 because the person turned up again the
+ * same day — or null if there's nothing to undo.
+ *
+ * [autoLeaveDue] has to decide "went home" vs "stepped out" while the absence is still running, and
+ * with no way to see the future it can only guess from elapsed time: past 3h, call it 퇴근. Coming
+ * back the same day *disproves* that guess — an outside meeting from 10:30 to 16:30 was one long
+ * 자리비움, not a 퇴근 plus a second 출근. Left as-is it reads as a full day's work in the chart
+ * (which draws one bar from the day's first 출근 to its last 퇴근) even though the totals correctly
+ * exclude the gap. So the return retroactively converts the LEAVE into an AWAY spanning the
+ * absence, and the original session simply continues.
+ *
+ * Worked minutes are unchanged by the conversion: an AWAY over the same span is deducted just as
+ * two separate sessions excluded it. Only the classification and what the UI can show differ.
+ *
+ * Identity is checked three ways before touching anything, because rewriting a *real* 퇴근 would
+ * silently fabricate hours:
+ *  - [last] must still be the row auto-leave wrote ([autoLeaveEventId]) — anything recorded since
+ *    means the session already moved on;
+ *  - it must still be a LEAVE stamped at [autoLeaveEventAt] — a user who corrected the type or the
+ *    time has overruled the automation, and their edit wins;
+ *  - it must be the same calendar day as [now] — returning tomorrow is a new session, and the
+ *    day-boundary net in [WifiMonitorService] owns that case.
+ *
+ * Top-level for the same reason as [arriveTimestamp]: unit-testable without a running Service.
+ */
+fun revertibleAutoLeave(
+    last: CommuteEvent?,
+    autoLeaveEventId: Long?,
+    autoLeaveEventAt: Long?,
+    now: Long
+): CommuteEvent? {
+    if (last == null || autoLeaveEventId == null || autoLeaveEventAt == null) return null
+    if (last.id != autoLeaveEventId) return null
+    if (last.type != CommuteEventType.LEAVE) return null
+    if (last.timestamp != autoLeaveEventAt) return null
+    if (now <= last.timestamp) return null
+    if (!isSameDayMillis(last.timestamp, now)) return null
+    return last
+}
+
+/** Whether two wall-clock instants fall on the same calendar day in the device's time zone. */
+fun isSameDayMillis(t1: Long, t2: Long): Boolean {
+    val cal1 = Calendar.getInstance().apply { timeInMillis = t1 }
+    val cal2 = Calendar.getInstance().apply { timeInMillis = t2 }
+    return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
+        cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
+}
+
+/**
  * Foreground service that polls for the registered company Wi-Fi every [CHECK_INTERVAL_MS] and
  * records commute events: presence is "SSID shows up in a nearby scan" ([isCompanyWifiNearby]),
  * not "phone is actually connected to it" — walking into range is enough, matching how a badge
@@ -273,6 +322,7 @@ class WifiMonitorService : Service() {
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
+                    settingsRepository.clearAutoLeaveEvent()
                     wasAtWork = false
                 } else if (!isSameDay(lastSeen, now)) {
                     // State first, insert second. This coroutine is cancelled whenever the
@@ -283,6 +333,9 @@ class WifiMonitorService : Service() {
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
+                    // A day-change close is not an auto-leave guess to be undone: yesterday's
+                    // session is over regardless of who turns up today.
+                    settingsRepository.clearAutoLeaveEvent()
                     // Same RF-tail trim as the normal auto-leave below — this close is stamped from
                     // lastSeen too, so it carries the same overshoot. See [leaveTimestamp].
                     val leftAt = leaveTimestamp(
@@ -320,17 +373,43 @@ class WifiMonitorService : Service() {
                     .coerceAtMost(now)
                 settingsRepository.setLastSeenAt(seenAt)
                 if (!wasAtWork) {
-                    // Stamped with when the OS actually saw the AP, not when this poll got to run
-                    // — those differ by minutes whenever the device was dozing. See
-                    // [arriveTimestamp].
-                    val arrivedAt = arriveTimestamp(detection.observedAt, now, latestEventTimestamp())
-                    settingsRepository.setIsAtWork(true)
-                    recordEvent(CommuteEventType.ARRIVE, presenceLabel, arrivedAt)
-                    showEventNotification(
-                        applicationContext,
-                        s.notifClockInTitle,
-                        s.notifClockInBody(presenceLabel, timeFormat.format(Date(arrivedAt)))
+                    // Turning up again on the same day disproves an auto-leave's "they went home"
+                    // guess: that absence was 자리비움, so rewrite it and carry the original
+                    // session on instead of opening a second one. See [revertibleAutoLeave].
+                    val revertible = revertibleAutoLeave(
+                        latestEvent(),
+                        settingsRepository.autoLeaveEventId.first(),
+                        settingsRepository.autoLeaveEventAt.first(),
+                        now
                     )
+                    if (revertible != null) {
+                        // Marker first: if this poll is cancelled part-way, a stale marker would
+                        // let the next one rewrite a row that has already been dealt with.
+                        settingsRepository.clearAutoLeaveEvent()
+                        revertLeaveToAway(revertible, now)
+                        settingsRepository.setIsAtWork(true)
+                        showEventNotification(
+                            applicationContext,
+                            s.notifLeaveRevertedTitle,
+                            s.notifLeaveRevertedBody(
+                                timeFormat.format(Date(revertible.timestamp)),
+                                timeFormat.format(Date(now))
+                            )
+                        )
+                    } else {
+                        // Stamped with when the OS actually saw the AP, not when this poll got to
+                        // run — those differ by minutes whenever the device was dozing. See
+                        // [arriveTimestamp].
+                        val arrivedAt = arriveTimestamp(detection.observedAt, now, latestEventTimestamp())
+                        settingsRepository.clearAutoLeaveEvent()
+                        settingsRepository.setIsAtWork(true)
+                        recordEvent(CommuteEventType.ARRIVE, presenceLabel, arrivedAt)
+                        showEventNotification(
+                            applicationContext,
+                            s.notifClockInTitle,
+                            s.notifClockInBody(presenceLabel, timeFormat.format(Date(arrivedAt)))
+                        )
+                    }
                 } else {
                     // Reconnected while still "at work": the session itself never ends here, but
                     // it's only actually recorded as 자리비움 if the disconnect reached the
@@ -409,7 +488,10 @@ class WifiMonitorService : Service() {
                     settingsRepository.setIsAtWork(false)
                     settingsRepository.clearAwaySinceAt()
                     settingsRepository.clearProvisionalAwaySinceAt()
-                    recordEvent(CommuteEventType.LEAVE, presenceLabel, leftAt)
+                    val leaveId = recordEvent(CommuteEventType.LEAVE, presenceLabel, leftAt)
+                    // This 퇴근 is a guess made mid-absence; remember it so a same-day return can
+                    // take it back as 자리비움. See [revertibleAutoLeave].
+                    settingsRepository.setAutoLeaveEvent(leaveId, leftAt)
                     showEventNotification(
                         applicationContext,
                         s.notifClockOutTitle,
@@ -469,17 +551,35 @@ class WifiMonitorService : Service() {
         }
     }
 
+    /** Inserts an event and returns its new row id. */
     private suspend fun recordEvent(
         type: CommuteEventType,
         ssid: String,
         timestamp: Long,
         endTimestamp: Long? = null
-    ) {
+    ): Long {
         val event = CommuteEvent(type = type, ssid = ssid, timestamp = timestamp, endTimestamp = endTimestamp)
         val id = CommuteDatabase.getInstance(applicationContext).commuteDao().insert(event)
         // Mirror to the crash-independent journal so this record survives a later DB wipe.
         recoveryJournal.append(event.copy(id = id))
+        return id
     }
+
+    /**
+     * Rewrites an auto-leave 퇴근 in place as the 자리비움 it turned out to be, ending [endedAt].
+     * The journal is a content-keyed mirror, so the old line has to be dropped before the new one
+     * is appended or a later "기록 로그에서 복구" would resurrect the very 퇴근 we just undid.
+     */
+    private suspend fun revertLeaveToAway(leave: CommuteEvent, endedAt: Long) {
+        val away = leave.copy(type = CommuteEventType.AWAY, endTimestamp = endedAt)
+        CommuteDatabase.getInstance(applicationContext).commuteDao().update(away)
+        recoveryJournal.remove(leave)
+        recoveryJournal.append(away)
+    }
+
+    /** Newest row, used to check whether the auto-leave 퇴근 is still the last thing on record. */
+    private suspend fun latestEvent(): CommuteEvent? =
+        CommuteDatabase.getInstance(applicationContext).commuteDao().getLast()
 
     /**
      * Newest instant already on record — an AWAY's end when it has one, otherwise its start. Used
@@ -491,12 +591,7 @@ class WifiMonitorService : Service() {
 
     private fun minutesBetween(t1: Long, t2: Long): Long = (t2 - t1) / 60_000L
 
-    private fun isSameDay(t1: Long, t2: Long): Boolean {
-        val cal1 = Calendar.getInstance().apply { timeInMillis = t1 }
-        val cal2 = Calendar.getInstance().apply { timeInMillis = t2 }
-        return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
-            cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
-    }
+    private fun isSameDay(t1: Long, t2: Long): Boolean = isSameDayMillis(t1, t2)
 
     override fun onDestroy() {
         // Cancel the alarm too, or the chain keeps waking the device (and restarting this

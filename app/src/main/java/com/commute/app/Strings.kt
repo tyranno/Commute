@@ -229,6 +229,8 @@ interface Strings {
     val notifAwayEndTitle: String
     fun notifAwayEndBody(time: String, minutes: Long): String
     fun notifAutoCloseAwayBody(time: String): String
+    val notifLeaveRevertedTitle: String
+    fun notifLeaveRevertedBody(leaveTime: String, backTime: String): String
 
     // --- ViewModel toasts ---
     val apNotFoundNameOnly: String
@@ -258,6 +260,9 @@ interface Strings {
     fun dayHeader(day: Long): String
     /** Trailing "(30분)" / "(30m)" duration for a record row. */
     fun minutesParen(minutes: Long): String
+    /** Trailing away duration with the lunch break removed, e.g. "(40분, 점심 제외)" /
+     * "(40m, excl. lunch)" — shown on a 자리비움 row whose span crossed the lunch window. */
+    fun minutesParenExLunch(minutes: Long): String
     /** Full date with weekday for leave/record pickers, e.g. "2026-07-23 (수)" / "2026-07-23 (Wed)". */
     fun leaveDate(timestamp: Long): String
 }
@@ -432,6 +437,9 @@ object KoStrings : Strings {
     override val notifAwayEndTitle = "자리비움 종료"
     override fun notifAwayEndBody(time: String, minutes: Long) = "복귀 $time (자리비움 ${minutes}분)"
     override fun notifAutoCloseAwayBody(time: String) = "자리비움이 이어져 자동 마감 $time"
+    override val notifLeaveRevertedTitle = "퇴근이 자리비움으로 정정됨"
+    override fun notifLeaveRevertedBody(leaveTime: String, backTime: String) =
+        "복귀 $backTime — $leaveTime 퇴근 기록을 자리비움으로 바꿨습니다"
 
     override val apNotFoundNameOnly = "AP를 찾지 못해 이름만으로 감지합니다. 회사에서 설정 > 회사 AP 등록을 눌러주세요"
     override fun apNotVisible(ssid: String) = "주변에 $ssid AP가 보이지 않습니다"
@@ -481,6 +489,7 @@ object KoStrings : Strings {
     }
 
     override fun minutesParen(minutes: Long) = "(${minutes}분)"
+    override fun minutesParenExLunch(minutes: Long) = "(${minutes}분, 점심 제외)"
 
     override fun leaveDate(timestamp: Long): String =
         SimpleDateFormat("yyyy-MM-dd (E)", locale).format(Date(timestamp))
@@ -648,6 +657,9 @@ object EnStrings : Strings {
     override val notifAwayEndTitle = "Away ended"
     override fun notifAwayEndBody(time: String, minutes: Long) = "Back at $time (away ${minutes}m)"
     override fun notifAutoCloseAwayBody(time: String) = "Auto-closed after extended away $time"
+    override val notifLeaveRevertedTitle = "Clock-out changed to away"
+    override fun notifLeaveRevertedBody(leaveTime: String, backTime: String) =
+        "Back at $backTime — the $leaveTime clock-out is now an away"
 
     override val apNotFoundNameOnly = "Couldn't find the AP, detecting by name only. At the office, tap Settings > Office APs."
     override fun apNotVisible(ssid: String) = "No $ssid AP visible nearby"
@@ -694,6 +706,7 @@ object EnStrings : Strings {
         SimpleDateFormat("MMM d (EEE)", locale).format(Date(day))
 
     override fun minutesParen(minutes: Long) = "(${minutes}m)"
+    override fun minutesParenExLunch(minutes: Long) = "(${minutes}m, excl. lunch)"
 
     override fun leaveDate(timestamp: Long): String =
         SimpleDateFormat("yyyy-MM-dd (EEE)", locale).format(Date(timestamp))

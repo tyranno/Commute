@@ -26,6 +26,8 @@ class SettingsRepository(private val context: Context) {
         val LAST_SEEN_AT = longPreferencesKey("last_seen_at")
         val AWAY_SINCE_AT = longPreferencesKey("away_since_at")
         val PROVISIONAL_AWAY_SINCE_AT = longPreferencesKey("provisional_away_since_at")
+        val AUTO_LEAVE_EVENT_ID = longPreferencesKey("auto_leave_event_id")
+        val AUTO_LEAVE_EVENT_AT = longPreferencesKey("auto_leave_event_at")
         val ABSENCE_THRESHOLD_MINUTES = intPreferencesKey("absence_threshold_minutes")
         val AUTO_LEAVE_AFTER_AWAY_MINUTES = intPreferencesKey("auto_leave_after_away_minutes")
         val LEAVE_MARGIN_MINUTES = intPreferencesKey("leave_margin_minutes")
@@ -72,6 +74,19 @@ class SettingsRepository(private val context: Context) {
      * it's promoted to a real [awaySinceAt] — filters out one-tick blips (brief reassociation,
      * DHCP renewal) that would otherwise show up as spurious ~1-minute 자리비움 records. */
     val provisionalAwaySinceAt: Flow<Long?> = context.dataStore.data.map { it[Keys.PROVISIONAL_AWAY_SINCE_AT] }
+
+    /** Row id of the 퇴근 that [autoLeaveAfterAwayMinutes] closed the current day's session with,
+     * while it's still undoable — null once it's been reverted, superseded, or the day has turned
+     * over. An auto-leave is a *guess* that the person went home, and coming back the same day
+     * disproves it: the absence was 자리비움 after all. Kept here rather than derived from the DB
+     * because "the newest row is a LEAVE" can't tell an auto-leave apart from a real 퇴근 the user
+     * recorded or corrected by hand — and silently rewriting one of those would be far worse than
+     * leaving a split session. See [revertibleAutoLeave][com.commute.app.wifi.revertibleAutoLeave]. */
+    val autoLeaveEventId: Flow<Long?> = context.dataStore.data.map { it[Keys.AUTO_LEAVE_EVENT_ID] }
+
+    /** The timestamp that auto-leave stamped on [autoLeaveEventId], so a row the user has since
+     * re-timed can be recognized and left alone. */
+    val autoLeaveEventAt: Flow<Long?> = context.dataStore.data.map { it[Keys.AUTO_LEAVE_EVENT_AT] }
 
     /** 자리비움 인정 기준(분) — 가산 연구소 운영 방안 기본값 10분. 이 미만의 단절은 퇴근이 아니라 자리비움으로 처리. */
     val absenceThresholdMinutes: Flow<Int> = context.dataStore.data.map {
@@ -172,6 +187,20 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it.remove(Keys.PROVISIONAL_AWAY_SINCE_AT) }
     }
 
+    suspend fun setAutoLeaveEvent(id: Long, timestamp: Long) {
+        context.dataStore.edit {
+            it[Keys.AUTO_LEAVE_EVENT_ID] = id
+            it[Keys.AUTO_LEAVE_EVENT_AT] = timestamp
+        }
+    }
+
+    suspend fun clearAutoLeaveEvent() {
+        context.dataStore.edit {
+            it.remove(Keys.AUTO_LEAVE_EVENT_ID)
+            it.remove(Keys.AUTO_LEAVE_EVENT_AT)
+        }
+    }
+
     /** Wipes the live session state so detection starts over from "not at work". Needed after a
      * backup restore: the poll *branches on* these values rather than re-deriving them, so a
      * leftover isAtWork=true made the service treat the restored day as already-arrived and skip
@@ -182,6 +211,8 @@ class SettingsRepository(private val context: Context) {
             it.remove(Keys.LAST_SEEN_AT)
             it.remove(Keys.AWAY_SINCE_AT)
             it.remove(Keys.PROVISIONAL_AWAY_SINCE_AT)
+            it.remove(Keys.AUTO_LEAVE_EVENT_ID)
+            it.remove(Keys.AUTO_LEAVE_EVENT_AT)
         }
     }
 

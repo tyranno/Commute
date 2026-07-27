@@ -158,11 +158,12 @@ fun overtimeMinutesTotal(stats: List<DailyWorkStat>, nowMillis: Long): Long {
  * arriving earlier doesn't count toward worked time or move the chart's bar earlier, matching
  * the 가산 연구소 운영 방안's 근무 인정 시간 07:00~22:00 lower bound. The configured lunch window
  * is always subtracted from a session that spans it — regardless of whether the person actually
- * disconnected from wifi during lunch — since it's unpaid break time either way. Any AWAY span
- * within the session that's at least [absenceThresholdMinutes] long is *also* subtracted (its
- * portion outside the lunch window, to avoid double-deducting time already covered by the lunch
- * subtraction) — shorter AWAY spans stay counted as work time, matching the 가산 연구소 운영
- * 방안 자리비움 rule. If the last ARRIVE has no matching LEAVE yet (still at work), the session
+ * disconnected from wifi during lunch — since it's unpaid break time either way. An AWAY span is
+ * then considered only for its portion *outside* that lunch window (lunch is carved out first, so
+ * being away over lunch is just the break, not a 자리비움); each remaining before-/after-lunch
+ * piece that reaches [absenceThresholdMinutes] is *also* subtracted, while shorter pieces stay
+ * counted as work time, matching the 가산 연구소 운영 방안 자리비움 rule. If the last ARRIVE has
+ * no matching LEAVE yet (still at work), the session
  * is closed at [nowMillis] so "today" reflects the ongoing session, and that day's
  * [DailyWorkStat.open] is true.
  */
@@ -300,17 +301,21 @@ fun findMissingRecords(events: List<CommuteEvent>, nowMillis: Long): List<Missin
 /**
  * Minutes to subtract from a session for absences that reached [absenceThresholdMinutes].
  *
- * Each span is clamped to the session's *recognized* window before being measured: time outside
- * it (before the 07:00 recognition start, or past the session end) was never counted as worked in
- * the first place, so deducting it would remove it twice — that cost ~45 minutes on a day with an
- * early arrival and a pre-07:00 absence. The threshold test uses the span's real duration, since
- * "was this a 자리비움" is about how long the person was actually away, not how much of it happens
- * to be recognized work time.
+ * The lunch window is carved out of every AWAY span *first*, before anything else: being away
+ * over lunch isn't a 자리비움, it's the unpaid break (already removed by the session-level lunch
+ * subtraction). What's left is each span's *work-time* absence — the part that overlaps actual
+ * recognized work — split into a before-lunch piece and an after-lunch piece. The 자리비움
+ * threshold is then tested against each of those pieces, so leaving a little early for lunch or
+ * coming back a little late isn't deducted unless the work-time portion itself reaches the
+ * threshold. (Previously the threshold was tested against the whole wall-clock span *including*
+ * lunch, so an away straddling lunch was treated as one long absence and its small outside-lunch
+ * minutes were deducted even when neither side reached the threshold.)
  *
- * Overlapping spans are merged so shared time is only deducted once, and the lunch window is
- * derived from the session's own day so it lines up exactly with the session-level lunch
- * subtraction — computing it per-span instead would use the wrong day for an overnight session
- * and credit unpaid lunch as worked time.
+ * Each piece is also clamped to the session's *recognized* window: time outside it (before the
+ * 07:00 recognition start, or past the session end) was never counted as worked, so deducting it
+ * would remove it twice. Overlapping pieces are merged so shared time is only deducted once, and
+ * the lunch window is derived from the session's own day so it lines up exactly with the
+ * session-level lunch subtraction.
  */
 private fun deductibleAwayMinutes(
     awaySpans: List<Pair<Long, Long>>,
@@ -320,15 +325,31 @@ private fun deductibleAwayMinutes(
     lunchStartMinute: Int,
     lunchEndMinute: Int
 ): Long {
-    val clamped = awaySpans
-        .filter { (start, end) -> (end - start) / 60_000 >= absenceThresholdMinutes }
-        .map { (start, end) -> maxOf(start, recognizedStart) to minOf(end, sessionEnd) }
-        .filter { (start, end) -> end > start }
-        .sortedBy { it.first }
-    if (clamped.isEmpty()) return 0
+    val hasLunch = lunchEndMinute > lunchStartMinute
+    val lunchStart = timestampAtMinuteOfDay(recognizedStart, lunchStartMinute)
+    val lunchEnd = timestampAtMinuteOfDay(recognizedStart, lunchEndMinute)
 
+    val thresholdMs = absenceThresholdMinutes.toLong() * 60_000
+    val pieces = mutableListOf<Pair<Long, Long>>()
+    for ((rawStart, rawEnd) in awaySpans) {
+        val start = maxOf(rawStart, recognizedStart)
+        val end = minOf(rawEnd, sessionEnd)
+        if (end <= start) continue
+        // Carve the lunch window out → up to two outside-lunch pieces (before / after lunch).
+        val candidates = if (hasLunch) {
+            listOf(start to minOf(end, lunchStart), maxOf(start, lunchEnd) to end)
+        } else {
+            listOf(start to end)
+        }
+        for ((s, e) in candidates) {
+            if (e - s >= thresholdMs) pieces.add(s to e)
+        }
+    }
+    if (pieces.isEmpty()) return 0
+
+    pieces.sortBy { it.first }
     val merged = mutableListOf<Pair<Long, Long>>()
-    for ((start, end) in clamped) {
+    for ((start, end) in pieces) {
         val last = merged.lastOrNull()
         if (last != null && start <= last.second) {
             merged[merged.lastIndex] = last.first to maxOf(last.second, end)
@@ -336,20 +357,58 @@ private fun deductibleAwayMinutes(
             merged.add(start to end)
         }
     }
-
-    val lunchStart = timestampAtMinuteOfDay(recognizedStart, lunchStartMinute)
-    val lunchEnd = timestampAtMinuteOfDay(recognizedStart, lunchEndMinute)
-    // Summed in millis and divided once, so per-span truncation doesn't compound into
+    // Summed in millis and divided once, so per-piece truncation doesn't compound into
     // several minutes of drift across a day with many absences.
-    val totalMs = merged.sumOf { (start, end) ->
-        val lunchOverlap = if (lunchStartMinute < lunchEndMinute) {
-            (minOf(end, lunchEnd) - maxOf(start, lunchStart)).coerceAtLeast(0)
-        } else {
-            0L
-        }
-        (end - start - lunchOverlap).coerceAtLeast(0)
-    }
-    return totalMs / 60_000
+    return merged.sumOf { (start, end) -> end - start } / 60_000
+}
+
+/**
+ * Away time to *show* for a single 자리비움 span, with the configured lunch window carved out —
+ * being away over lunch is just the unpaid break, so it isn't a 자리비움. This mirrors how
+ * [computeDailyWorkStats]/[deductibleAwayMinutes] treat lunch, but with *no* absence threshold: the
+ * display reports the real outside-lunch away duration (both the before-lunch and after-lunch
+ * pieces), not only the part long enough to be deducted from worked time. Returns the raw span when
+ * no lunch window is configured, and 0 when the whole span falls inside lunch.
+ */
+fun awayMinutesExcludingLunch(
+    start: Long,
+    end: Long,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int
+): Long {
+    if (end <= start) return 0
+    if (lunchStartMinute >= lunchEndMinute) return (end - start) / 60_000
+    val lunchStart = timestampAtMinuteOfDay(start, lunchStartMinute)
+    val lunchEnd = timestampAtMinuteOfDay(start, lunchEndMinute)
+    val before = (minOf(end, lunchStart) - start).coerceAtLeast(0)
+    val after = (end - maxOf(start, lunchEnd)).coerceAtLeast(0)
+    return (before + after) / 60_000
+}
+
+/**
+ * The 자리비움 time *range* to display, with lunch-window endpoints trimmed to the lunch boundary —
+ * the companion to [awayMinutesExcludingLunch], which trims the *duration*. If the span starts inside
+ * the lunch window its shown start is moved forward to lunch end, and if it ends inside lunch its
+ * shown end is moved back to lunch start, so the displayed range matches the actual outside-lunch
+ * 자리비움 (e.g. 11:59~13:00 with an 11:20~12:20 lunch shows as 12:20~13:00, not 11:59~13:00). A span
+ * that straddles lunch entirely keeps both real endpoints (lunch just sits in the middle). Returns
+ * the raw span when no lunch window is configured, and null when the whole span falls inside lunch
+ * (nothing outside-lunch to show).
+ */
+fun awayDisplayRange(
+    start: Long,
+    end: Long,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int
+): Pair<Long, Long>? {
+    if (end <= start) return null
+    if (lunchStartMinute >= lunchEndMinute) return start to end
+    val lunchStart = timestampAtMinuteOfDay(start, lunchStartMinute)
+    val lunchEnd = timestampAtMinuteOfDay(start, lunchEndMinute)
+    if (start >= lunchStart && end <= lunchEnd) return null // whole span inside lunch
+    val displayStart = if (start in lunchStart until lunchEnd) lunchEnd else start
+    val displayEnd = if (end > lunchStart && end <= lunchEnd) lunchStart else end
+    return if (displayEnd > displayStart) displayStart to displayEnd else null
 }
 
 /** Minutes of [sessionStart, sessionEnd) that fall inside the configured lunch window
@@ -366,4 +425,75 @@ private fun lunchOverlapMinutes(
     val overlapStart = maxOf(sessionStart, lunchStart)
     val overlapEnd = minOf(sessionEnd, lunchEnd)
     return if (overlapEnd > overlapStart) (overlapEnd - overlapStart) / 60_000 else 0
+}
+
+/** A half-open minute-of-day interval `[start, end)`, used for chart geometry. */
+data class MinuteSpan(val start: Int, val end: Int)
+
+private const val MINUTES_PER_DAY = 24 * 60
+
+/**
+ * The minute-of-day stretches of [dayStart]'s bar where the person was *not* at the office:
+ * recorded 자리비움 spans, plus any 퇴근→출근 gap between two sessions on the same day.
+ *
+ * The chart used to draw one solid bar from a day's first 출근 to its last 퇴근, which made an
+ * absence invisible — a day with a 10:30~16:15 outside meeting read as nine hours of continuous
+ * work even though the totals correctly excluded it. These are the pieces to cut back out, so the
+ * bar shows presence rather than mere span.
+ *
+ * Both kinds of hole are collected because they're the same thing recorded two ways: an absence
+ * that resolved on its own is an AWAY, while one that outlasted 자동 퇴근 처리 기준 before the
+ * person came back is a LEAVE followed by a fresh ARRIVE. Spans are clamped into the day (an AWAY
+ * that runs past midnight is cut at 24:00) and returned sorted; overlaps are the caller's to merge
+ * via [subtractSpans].
+ */
+fun absentMinuteSpans(dayEvents: List<CommuteEvent>, dayStart: Long): List<MinuteSpan> {
+    fun minuteOf(timestamp: Long): Int =
+        ((timestamp - dayStart) / 60_000L).coerceIn(0L, MINUTES_PER_DAY.toLong()).toInt()
+
+    val sorted = dayEvents.sortedBy { it.timestamp }
+    val spans = mutableListOf<MinuteSpan>()
+    sorted.forEach { event ->
+        if (event.type != CommuteEventType.AWAY) return@forEach
+        val end = event.endTimestamp ?: return@forEach
+        val span = MinuteSpan(minuteOf(event.timestamp), minuteOf(end))
+        if (span.end > span.start) spans += span
+    }
+    var openLeaveAt: Long? = null
+    sorted.forEach { event ->
+        when (event.type) {
+            CommuteEventType.LEAVE -> openLeaveAt = event.timestamp
+            CommuteEventType.ARRIVE -> {
+                openLeaveAt?.let { leftAt ->
+                    val span = MinuteSpan(minuteOf(leftAt), minuteOf(event.timestamp))
+                    if (span.end > span.start) spans += span
+                }
+                openLeaveAt = null
+            }
+            CommuteEventType.AWAY -> Unit
+        }
+    }
+    return spans.sortedBy { it.start }
+}
+
+/**
+ * [base] with every span in [cuts] removed — the parts of a day's bar that should actually be
+ * drawn. Overlapping and out-of-order cuts are handled, so callers can pass
+ * [absentMinuteSpans]' output straight through. Returns an empty list when the cuts cover
+ * everything.
+ */
+fun subtractSpans(base: MinuteSpan, cuts: List<MinuteSpan>): List<MinuteSpan> {
+    if (base.end <= base.start) return emptyList()
+    val clipped = cuts
+        .map { MinuteSpan(it.start.coerceAtLeast(base.start), it.end.coerceAtMost(base.end)) }
+        .filter { it.end > it.start }
+        .sortedBy { it.start }
+    val remaining = mutableListOf<MinuteSpan>()
+    var cursor = base.start
+    clipped.forEach { cut ->
+        if (cut.start > cursor) remaining += MinuteSpan(cursor, cut.start)
+        cursor = maxOf(cursor, cut.end)
+    }
+    if (cursor < base.end) remaining += MinuteSpan(cursor, base.end)
+    return remaining
 }

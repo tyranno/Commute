@@ -61,6 +61,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
+import com.commute.app.data.absentMinuteSpans
+import com.commute.app.data.awayDisplayRange
+import com.commute.app.data.awayMinutesExcludingLunch
+import com.commute.app.data.MinuteSpan
+import com.commute.app.data.subtractSpans
 import com.commute.app.data.DAILY_REQUIRED_MINUTES
 import com.commute.app.data.DailyWorkStat
 import com.commute.app.data.LeaveEntry
@@ -169,6 +174,7 @@ fun StatusTab(
                 WeeklyRangeChart(
                     stats = dailyStats,
                     leaves = leaves,
+                    events = events,
                     weekStart = weekStart,
                     lunchStartMinute = lunchStartMinute,
                     lunchEndMinute = lunchEndMinute,
@@ -193,6 +199,8 @@ fun StatusTab(
             dayLeaves = leaves.filter { startOfDay(it.date) == day },
             creditedMinutes = dayStat?.creditedMinutes ?: 0L,
             companySsid = companySsid,
+            lunchStartMinute = lunchStartMinute,
+            lunchEndMinute = lunchEndMinute,
             onAddEvent = onAddEvent,
             onUpdateEvent = onUpdateEvent,
             onDeleteEvent = onDeleteEvent,
@@ -207,6 +215,8 @@ fun RecordsTab(
     events: List<CommuteEvent>,
     missingRecords: List<MissingRecordFlag>,
     companySsid: String?,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
     onDeleteEvent: (CommuteEvent) -> Unit,
@@ -219,7 +229,9 @@ fun RecordsTab(
 
     // Preset ranges instead of two hand-picked dates: one tap filters the list. The upper bound
     // is always open (today is included); each preset only sets the lower bound. 전체 = show all.
-    var selectedRange by remember { mutableStateOf(DateRangePreset.ALL) }
+    // Opens on 이번주: the records people come here to check are almost always this week's, and
+    // 전체 buried them under months of history that had to be scrolled past first.
+    var selectedRange by remember { mutableStateOf(DateRangePreset.THIS_WEEK) }
     val filterStart = selectedRange.startMillis(System.currentTimeMillis())
     val filteredEvents = events.filter { event ->
         filterStart == null || startOfDay(event.timestamp) >= filterStart
@@ -275,7 +287,7 @@ fun RecordsTab(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     items(filteredEvents.sortedByDescending { it.timestamp }, key = { it.id }) { event ->
-                        EventRow(event, onClick = { editingEvent = event })
+                        EventRow(event, lunchStartMinute, lunchEndMinute, onClick = { editingEvent = event })
                     }
                 }
             }
@@ -417,6 +429,7 @@ private fun StatTile(
 private fun WeeklyRangeChart(
     stats: List<DailyWorkStat>,
     leaves: List<LeaveEntry>,
+    events: List<CommuteEvent>,
     weekStart: Long,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
@@ -439,6 +452,7 @@ private fun WeeklyRangeChart(
     val days = (0 until visibleDayCount).map { weekStart + it * DAY_MS }
     val statByDay = stats.associateBy { it.dayStart }
     val leavesByDay = leaves.groupBy { startOfDay(it.date) }
+    val eventsByDay = events.groupBy { startOfDay(it.timestamp) }
     val barColor = MaterialTheme.colorScheme.primary
     val lunchColor = MaterialTheme.colorScheme.tertiary
     val leaveColor = MaterialTheme.colorScheme.secondary
@@ -574,28 +588,63 @@ private fun WeeklyRangeChart(
                 val departAt = if (stat.open) now else (stat.lastLeaveAt ?: return@forEachIndexed)
                 val arriveMinute = minuteOfDay(arriveAt)
                 val departMinute = minuteOfDay(departAt)
+                // The bar shows *presence*, not merely the span from the day's first 출근 to its
+                // last 퇴근: 자리비움 and 퇴근→출근 gaps are cut back out, so a day with an outside
+                // meeting reads as two blocks with a hole between them instead of one unbroken
+                // nine-hour bar. Everything painted on the bar below is clipped to these same
+                // pieces, so nothing is ever drawn across a hole.
+                val daySpan = MinuteSpan(arriveMinute, departMinute)
+                val presentSpans = subtractSpans(
+                    daySpan,
+                    absentMinuteSpans(eventsByDay[day].orEmpty(), day)
+                )
+                // The absence is drawn as a faded stretch of the same bar rather than left blank,
+                // so the day still reads as one continuous span with a dim middle — a plain hole
+                // looked like two unrelated days, and lost the fact that 출근 and 퇴근 bracket it.
+                // Square corners (unlike the solid pieces) so it butts flush against them.
+                subtractSpans(daySpan, presentSpans).forEach { span ->
+                    val gapTop = yFor(span.end)
+                    val gapBottom = yFor(span.start).coerceAtLeast(gapTop + 2f)
+                    drawRect(
+                        color = barColor.copy(alpha = alpha * 0.22f),
+                        topLeft = Offset(left, gapTop),
+                        size = Size(barWidth, gapBottom - gapTop)
+                    )
+                }
+                // Outer edges of the whole day, for the 출근/퇴근 annotations — those label the
+                // day's first arrival and last departure, so they stay anchored to the full span
+                // even when the bar itself is broken into pieces.
                 val top = yFor(departMinute)
                 val bottom = yFor(arriveMinute).coerceAtLeast(top + 4f)
-                val path = Path().apply {
-                    addRoundRect(RoundRect(rect = Rect(left, top, left + barWidth, bottom), cornerRadius = corner))
+                presentSpans.forEach { span ->
+                    val segTop = yFor(span.end)
+                    val segBottom = yFor(span.start).coerceAtLeast(segTop + 2f)
+                    drawPath(
+                        Path().apply {
+                            addRoundRect(
+                                RoundRect(rect = Rect(left, segTop, left + barWidth, segBottom), cornerRadius = corner)
+                            )
+                        },
+                        color = barColor.copy(alpha = alpha)
+                    )
                 }
-                drawPath(path, color = barColor.copy(alpha = alpha))
 
-                // Distinguish worked time beyond the daily 8시간 requirement: paint the top segment
-                // of the bar (its last `overtime` worked-minutes before departure) in the 초과근무
-                // color. Lunch and long 자리비움 sit earlier in the day, so in practice the closing
-                // stretch of the bar is contiguous work — a good approximation of "which hours were
-                // overtime" without reconstructing the exact minute work crossed 8시간.
-                val overtimeMinutes = (stat.workedMinutes - DAILY_REQUIRED_MINUTES).coerceAtLeast(0)
-                if (overtimeMinutes > 0) {
-                    val otStartMinute = (departMinute - overtimeMinutes.toInt()).coerceAtLeast(arriveMinute)
-                    val otTop = yFor(departMinute)
-                    val otBottom = yFor(otStartMinute).coerceAtLeast(otTop + 2f)
+                // Distinguish worked time beyond the daily 8시간 requirement by painting the
+                // closing stretch of the bar in the 초과근무 color. Walked backwards through the
+                // present pieces rather than taken as one window before departure, so an absence
+                // late in the day doesn't get counted as part of the overtime stretch.
+                var overtimeLeft = (stat.workedMinutes - DAILY_REQUIRED_MINUTES).coerceAtLeast(0)
+                for (span in presentSpans.asReversed()) {
+                    if (overtimeLeft <= 0) break
+                    val take = minOf((span.end - span.start).toLong(), overtimeLeft).toInt()
+                    val otTop = yFor(span.end)
+                    val otBottom = yFor(span.end - take).coerceAtLeast(otTop + 2f)
                     drawRect(
                         color = overtimeColor.copy(alpha = alpha),
                         topLeft = Offset(left, otTop),
                         size = Size(barWidth, otBottom - otTop)
                     )
+                    overtimeLeft -= take
                 }
 
                 // Times annotated directly on the bar — arrival just under its bottom edge,
@@ -626,11 +675,14 @@ private fun WeeklyRangeChart(
                     drawBarTime(formatTimeOnly(departAt), top - departMeasured.size.height - labelGap)
                 }
 
-                // Mark the portion of the bar that falls inside the configured lunch window —
-                // it's excluded from worked time, so it reads visually as a break in the bar.
+                // Mark the portion of the bar that falls inside the configured lunch window — it's
+                // excluded from worked time, so it reads visually as a break in the bar. Spans the
+                // whole day rather than only the present pieces, so lunch stays marked on a day
+                // spent away over it (an outside meeting) — the faded absence stretch is still part
+                // of the bar, and colour alone is enough to place the break.
                 if (lunchStartMinute < lunchEndMinute) {
-                    val overlapStart = maxOf(arriveMinute, lunchStartMinute)
-                    val overlapEnd = minOf(departMinute, lunchEndMinute)
+                    val overlapStart = maxOf(daySpan.start, lunchStartMinute)
+                    val overlapEnd = minOf(daySpan.end, lunchEndMinute)
                     if (overlapEnd > overlapStart) {
                         val lunchTop = yFor(overlapEnd)
                         val lunchBottom = yFor(overlapStart)
@@ -665,6 +717,8 @@ private fun DayDetailDialog(
     dayLeaves: List<LeaveEntry>,
     creditedMinutes: Long,
     companySsid: String?,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
     onDeleteEvent: (CommuteEvent) -> Unit,
@@ -714,7 +768,9 @@ private fun DayDetailDialog(
                     Text(s.noRecordsThisDay, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        dayEvents.forEach { event -> EventRow(event, onClick = { editingEvent = event }) }
+                        dayEvents.forEach { event ->
+                            EventRow(event, lunchStartMinute, lunchEndMinute, onClick = { editingEvent = event })
+                        }
                     }
                 }
             }
@@ -758,7 +814,12 @@ private fun weekDateRange(weekStart: Long): String {
 }
 
 @Composable
-private fun EventRow(event: CommuteEvent, onClick: () -> Unit = {}) {
+private fun EventRow(
+    event: CommuteEvent,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int,
+    onClick: () -> Unit = {}
+) {
     val s = LocalStrings.current
     val (icon, label, tint) = when (event.type) {
         CommuteEventType.ARRIVE -> Triple(Icons.Filled.Work, s.eventArrive, Color(0xFF2E7D32))
@@ -782,21 +843,84 @@ private fun EventRow(event: CommuteEvent, onClick: () -> Unit = {}) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text(formatEventTimeRange(event, s), style = MaterialTheme.typography.bodyMedium)
+            // Range and duration on separate lines rather than one long string: a 자리비움 carries
+            // both a range and a "(286분, 점심 제외)" tail, which wrapped across several lines and
+            // made those rows tower over the plain 출근/퇴근 ones. Two right-aligned lines match the
+            // label/ssid column beside them, so every row is the same height whatever its type.
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    formatEventRangeText(event, lunchStartMinute, lunchEndMinute),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1
+                )
+                formatEventDurationText(event, s, lunchStartMinute, lunchEndMinute)?.let { duration ->
+                    Text(
+                        duration,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }
 
-private fun formatEventTimeRange(event: CommuteEvent, s: Strings): String {
+/**
+ * The time an event row shows, without its duration: a stamp for 출근/퇴근, a range for anything
+ * with an end. A 자리비움 range is trimmed to the lunch boundary (12:20~13:00, not 11:59~13:00) so
+ * it agrees with the lunch-excluded minutes beside it instead of contradicting them with a raw
+ * start inside the break.
+ */
+private fun formatEventRangeText(
+    event: CommuteEvent,
+    lunchStartMinute: Int = 0,
+    lunchEndMinute: Int = 0
+): String {
     val dateTimeFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-    val end = event.endTimestamp
-    return if (end != null) {
-        "${dateTimeFormat.format(Date(event.timestamp))}~${timeFormat.format(Date(end))}" + " " + s.minutesParen((end - event.timestamp) / 60_000)
+    val end = event.endTimestamp ?: return dateTimeFormat.format(Date(event.timestamp))
+    val trimmed = if (event.type == CommuteEventType.AWAY) {
+        awayDisplayRange(event.timestamp, end, lunchStartMinute, lunchEndMinute)
     } else {
-        dateTimeFormat.format(Date(event.timestamp))
+        null
     }
+    val from = trimmed?.first ?: event.timestamp
+    val to = trimmed?.second ?: end
+    return "${dateTimeFormat.format(Date(from))}~${timeFormat.format(Date(to))}"
 }
+
+/**
+ * The duration shown under an event's time, or null for a plain 출근/퇴근 stamp that has none. A
+ * 자리비움 straddling lunch reports only its outside-lunch minutes — lunch is the unpaid break, not
+ * a 자리비움 — matching how worked time is computed, and says so in the label.
+ *
+ * Separate from [formatEventRangeText] so a row can put the two on their own lines; as one string
+ * the 자리비움 text wrapped and left those rows far taller than the rest of the list.
+ */
+private fun formatEventDurationText(
+    event: CommuteEvent,
+    s: Strings,
+    lunchStartMinute: Int = 0,
+    lunchEndMinute: Int = 0
+): String? {
+    val end = event.endTimestamp ?: return null
+    val rawMinutes = (end - event.timestamp) / 60_000
+    if (event.type != CommuteEventType.AWAY) return s.minutesParen(rawMinutes)
+    val exLunch = awayMinutesExcludingLunch(event.timestamp, end, lunchStartMinute, lunchEndMinute)
+    return if (exLunch != rawMinutes) s.minutesParenExLunch(exLunch) else s.minutesParen(exLunch)
+}
+
+/** Both of the above as one string, for the 기록 누락 banner's inline sentence. */
+private fun formatEventTimeRange(
+    event: CommuteEvent,
+    s: Strings,
+    lunchStartMinute: Int = 0,
+    lunchEndMinute: Int = 0
+): String = listOfNotNull(
+    formatEventRangeText(event, lunchStartMinute, lunchEndMinute),
+    formatEventDurationText(event, s, lunchStartMinute, lunchEndMinute)
+).joinToString(" ")
 
 private fun formatTimeOnly(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
