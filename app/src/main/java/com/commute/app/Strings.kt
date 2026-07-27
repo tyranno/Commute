@@ -258,7 +258,8 @@ interface Strings {
     fun weekday(dayStart: Long): String
     /** Dialog header for a day, e.g. "7월 23일 (수)" / "Jul 23 (Wed)". */
     fun dayHeader(day: Long): String
-    /** Trailing "(30분)" / "(30m)" duration for a record row. */
+    /** Trailing "(30분)" / "(4시간 46분)" duration for a record row — hours and minutes once it
+     * passes an hour, since a long 자리비움 shown as a bare "(286분)" takes arithmetic to read. */
     fun minutesParen(minutes: Long): String
     /** Trailing away duration with the lunch break removed, e.g. "(40분, 점심 제외)" /
      * "(40m, excl. lunch)" — shown on a 자리비움 row whose span crossed the lunch window. */
@@ -488,8 +489,8 @@ object KoStrings : Strings {
         return "${fmt.format(Date(day))} (${weekdayNames[cal.get(Calendar.DAY_OF_WEEK) - 1]})"
     }
 
-    override fun minutesParen(minutes: Long) = "(${minutes}분)"
-    override fun minutesParenExLunch(minutes: Long) = "(${minutes}분, 점심 제외)"
+    override fun minutesParen(minutes: Long) = "(${workHoursMinutes(minutes)})"
+    override fun minutesParenExLunch(minutes: Long) = "(${workHoursMinutes(minutes)}, 점심 제외)"
 
     override fun leaveDate(timestamp: Long): String =
         SimpleDateFormat("yyyy-MM-dd (E)", locale).format(Date(timestamp))
@@ -705,8 +706,8 @@ object EnStrings : Strings {
     override fun dayHeader(day: Long): String =
         SimpleDateFormat("MMM d (EEE)", locale).format(Date(day))
 
-    override fun minutesParen(minutes: Long) = "(${minutes}m)"
-    override fun minutesParenExLunch(minutes: Long) = "(${minutes}m, excl. lunch)"
+    override fun minutesParen(minutes: Long) = "(${workHoursMinutes(minutes)})"
+    override fun minutesParenExLunch(minutes: Long) = "(${workHoursMinutes(minutes)}, excl. lunch)"
 
     override fun leaveDate(timestamp: Long): String =
         SimpleDateFormat("yyyy-MM-dd (EEE)", locale).format(Date(timestamp))
