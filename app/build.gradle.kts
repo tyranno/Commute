@@ -55,6 +55,16 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // Signed with the same release key (when available) rather than the auto-generated debug
+        // keystore, so a debug build installed for day-to-day testing shares its signing
+        // certificate with a shipped release — Android refuses to upgrade a package in place
+        // across different signing certs, which otherwise forces an uninstall (losing on-device
+        // data) the first time a debug tester tries to install a real release, or vice versa.
+        debug {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {
