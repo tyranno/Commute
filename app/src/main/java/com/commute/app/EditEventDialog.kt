@@ -44,11 +44,13 @@ import java.util.Calendar
 import java.util.TimeZone
 
 /**
- * Lets the user correct a misdetected record (change its type, its time(s), or delete it) or,
- * when [isNew] is true, fill in one the service missed entirely (e.g. a wifi/permission hiccup,
- * or the phone being off) — same fields, just an insert instead of an update and no delete option.
- * Date/time are picked with the platform's own DatePicker/TimePicker (well-known, familiar
- * components) rather than typed as free text, so there's no invalid-format guessing.
+ * Lets the user correct a misdetected record (change its type, its time(s), or exclude it from
+ * 기록보기) or, when [isNew] is true, fill in one the service missed entirely (e.g. a wifi/permission
+ * hiccup, or the phone being off) — same fields, just an insert instead of an update and no exclude
+ * option. [onDelete], despite its name, excludes rather than removes the row — see
+ * [CommuteViewModel.excludeEvent]. Date/time are picked with the platform's own DatePicker/TimePicker
+ * (well-known, familiar components) rather than typed as free text, so there's no invalid-format
+ * guessing.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,7 +123,7 @@ fun EditEventDialog(
                 }
                 if (confirmingDelete) {
                     Text(
-                        s.deleteIrreversible,
+                        s.excludeExplain,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -143,7 +145,7 @@ fun EditEventDialog(
                 if (onDelete != null) {
                     TextButton(onClick = {
                         if (confirmingDelete) onDelete() else confirmingDelete = true
-                    }) { Text(if (confirmingDelete) s.reallyDelete else s.delete, color = MaterialTheme.colorScheme.error) }
+                    }) { Text(if (confirmingDelete) s.reallyExclude else s.excludeAction, color = MaterialTheme.colorScheme.error) }
                 }
                 TextButton(onClick = onDismiss) { Text(s.cancel) }
             }

@@ -8,7 +8,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [CommuteEvent::class, LeaveEntry::class], version = 3, exportSchema = false)
+@Database(entities = [CommuteEvent::class, LeaveEntry::class], version = 4, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class CommuteDatabase : RoomDatabase() {
     abstract fun commuteDao(): CommuteDao
@@ -35,6 +35,14 @@ abstract class CommuteDatabase : RoomDatabase() {
             }
         }
 
+        /** Adds [CommuteEvent.excluded]. A plain ADD COLUMN with a default, so every existing
+         * record stays exactly as it is and simply starts out not-excluded. */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `commute_events` ADD COLUMN `excluded` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): CommuteDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -42,7 +50,7 @@ abstract class CommuteDatabase : RoomDatabase() {
                     CommuteDatabase::class.java,
                     "commute.db"
                 )
-                    .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                     // Last-resort only: real data exists now, so proper migrations (above) are the
                     // path across schema changes. This just avoids a crash-loop if an unforeseen
                     // version gap ever appears with no migration.

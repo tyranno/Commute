@@ -21,13 +21,21 @@ import com.commute.app.data.overtimeMinutesForWeek
 import com.commute.app.data.parseBackupJson
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
+import com.commute.app.update.ReleaseInfo
+import com.commute.app.update.UpdateStatus
+import com.commute.app.update.currentAppVersionName
+import com.commute.app.update.downloadApk
+import com.commute.app.update.fetchLatestRelease
+import com.commute.app.update.isNewerVersion
 import com.commute.app.wifi.WifiMonitorService
 import com.commute.app.wifi.nearbyBssidsFor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -82,13 +90,32 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val awaySinceAt: StateFlow<Long?> = settingsRepository.awaySinceAt
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val events: StateFlow<List<CommuteEvent>> = dao.observeAll()
+    /** Every recorded row, excluded or not — the DB-truth baseline [recoverableCount] compares the
+     * journal against. Not read by the UI directly (see [events]/[excludedEvents]). */
+    private val allEvents: StateFlow<List<CommuteEvent>> = dao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** All recorded events *except* excluded ones — everything downstream (기록 리스트, the chart,
+     * worked-time totals, missing-record detection) reads from this, so excluding a record removes
+     * it from all of those the same way a hard delete used to, without the data loss. */
+    val events: StateFlow<List<CommuteEvent>> = allEvents
+        .map { all -> all.filterNot { it.excluded } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Records the user has taken out of their history — hidden everywhere [events] is used, but
+     * still in the DB and listable here so any of them can be put back. */
+    val excludedEvents: StateFlow<List<CommuteEvent>> = allEvents
+        .map { all -> all.filter { it.excluded } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** How many events sit in the recovery journal but are missing from the live DB — records a
      * wipe or partial loss dropped that [recoverFromJournal] can restore. 0 in normal operation;
-     * re-derived whenever the DB changes (a recovery drops it back to 0). */
-    val recoverableCount: StateFlow<Int> = events
+     * re-derived whenever the DB changes (a recovery drops it back to 0).
+     *
+     * Compared against [allEvents], not [events]: an excluded record is still physically in the
+     * DB, just hidden, and comparing against the filtered list would count every excluded record
+     * as "missing" and invite recovering something that was never lost. */
+    val recoverableCount: StateFlow<Int> = allEvents
         .map { current -> withContext(Dispatchers.IO) { recoveryJournal.readMissing(current).size } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
@@ -361,11 +388,25 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun deleteEvent(event: CommuteEvent) {
+    /**
+     * "Deleting" a record from 기록보기 no longer removes its row: it flips [CommuteEvent.excluded],
+     * which drops it out of [events] (and everything computed from it) exactly as a hard delete
+     * used to, but the row — and whatever the radio actually saw — is still there to bring back
+     * with [restoreEvent]. A mis-tap or a change of mind used to be unrecoverable; now it isn't.
+     */
+    fun excludeEvent(event: CommuteEvent) = setExcluded(event, true)
+
+    /** Brings a record back into 기록보기 and every total computed from it. */
+    fun restoreEvent(event: CommuteEvent) = setExcluded(event, false)
+
+    private fun setExcluded(event: CommuteEvent, excluded: Boolean) {
         viewModelScope.launch {
-            dao.delete(event)
-            // A deliberate delete removes it from the journal too, so recovery won't resurrect it.
+            val updated = event.copy(excluded = excluded)
+            dao.update(updated)
+            // Content changed (the x flag), so the journal line has to be replaced, not just left —
+            // same pattern as updateEvent: drop the stale line, log the current one.
             recoveryJournal.remove(event)
+            recoveryJournal.append(updated)
         }
     }
 
@@ -481,6 +522,57 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 Toast.makeText(app, s.restoreFail(e.message), Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    private val _updateStatus = MutableStateFlow<UpdateStatus>(UpdateStatus.Idle)
+    val updateStatus: StateFlow<UpdateStatus> = _updateStatus.asStateFlow()
+
+    /** Checks the app's GitHub releases for a version newer than what's installed. Safe to call
+     * repeatedly (e.g. tapping "check again" after [UpdateStatus.Failed]) — it always starts over
+     * from [UpdateStatus.Checking] rather than needing to be reset first. */
+    fun checkForUpdate() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            _updateStatus.value = UpdateStatus.Checking
+            _updateStatus.value = try {
+                val release = withContext(Dispatchers.IO) { fetchLatestRelease() }
+                val currentVersion = currentAppVersionName(app)
+                when {
+                    release == null -> UpdateStatus.UpToDate
+                    isNewerVersion(release.version, currentVersion) -> UpdateStatus.Available(release)
+                    else -> UpdateStatus.UpToDate
+                }
+            } catch (e: Exception) {
+                UpdateStatus.Failed(e.message)
+            }
+        }
+    }
+
+    /** Downloads [release]'s APK, reporting progress through [UpdateStatus.Downloading], then
+     * leaves the state at [UpdateStatus.ReadyToInstall] for the user to confirm — the system
+     * installer is a whole separate permission-and-confirmation flow, so this never launches it
+     * on its own. */
+    fun downloadUpdate(release: ReleaseInfo) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            _updateStatus.value = UpdateStatus.Downloading(release, 0)
+            _updateStatus.value = try {
+                val file = withContext(Dispatchers.IO) {
+                    downloadApk(app.cacheDir, release.downloadUrl) { percent ->
+                        _updateStatus.value = UpdateStatus.Downloading(release, percent)
+                    }
+                }
+                UpdateStatus.ReadyToInstall(file)
+            } catch (e: Exception) {
+                UpdateStatus.Failed(e.message)
+            }
+        }
+    }
+
+    /** Back to square one for the update card — used when the user backs out of
+     * [UpdateStatus.Available]/[UpdateStatus.Failed] instead of following through. */
+    fun dismissUpdate() {
+        _updateStatus.value = UpdateStatus.Idle
     }
 
     private fun minuteTicker(): Flow<Unit> = flow {

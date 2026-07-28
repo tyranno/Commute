@@ -127,7 +127,8 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
     // no activity restart.
     val language by viewModel.language.collectAsState()
     val deviceLanguage = LocalConfiguration.current.locales[0].language
-    val strings = remember(language, deviceLanguage) { stringsFor(language.resolve(deviceLanguage)) }
+    val lang = remember(language, deviceLanguage) { language.resolve(deviceLanguage) }
+    val strings = remember(lang) { stringsFor(lang) }
     CompositionLocalProvider(LocalStrings provides strings) {
         NavHost(navController = navController, startDestination = "home") {
             composable("home") {
@@ -144,7 +145,7 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
                 )
             }
             composable("policy") {
-                PolicyDocumentScreen(onBack = { navController.popBackStack() })
+                PolicyDocumentScreen(lang = lang, onBack = { navController.popBackStack() })
             }
         }
     }
@@ -164,6 +165,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val awaySinceAt by viewModel.awaySinceAt.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val allEvents by viewModel.events.collectAsState()
+    val excludedEvents by viewModel.excludedEvents.collectAsState()
     val todayWorkedMinutes by viewModel.todayWorkedMinutes.collectAsState()
     val todayWorkedMinutesIncludingLunch by viewModel.todayWorkedMinutesIncludingLunch.collectAsState()
     val weeklyWorkedMinutes by viewModel.weeklyWorkedMinutes.collectAsState()
@@ -418,18 +420,20 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         showWeekend = showWeekend,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,
-                        onDeleteEvent = viewModel::deleteEvent,
+                        onExcludeEvent = viewModel::excludeEvent,
                         modifier = Modifier.weight(1f)
                     )
                     1 -> RecordsTab(
                         events = allEvents,
+                        excludedEvents = excludedEvents,
                         missingRecords = missingRecords,
                         companySsid = companySsid,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
                         onAddEvent = viewModel::addEvent,
                         onUpdateEvent = viewModel::updateEvent,
-                        onDeleteEvent = viewModel::deleteEvent,
+                        onExcludeEvent = viewModel::excludeEvent,
+                        onRestoreEvent = viewModel::restoreEvent,
                         modifier = Modifier.weight(1f)
                     )
                     else -> LeaveTab(

@@ -126,14 +126,17 @@ class RecoveryJournal(context: Context) {
  * practice: two events of the same type never share a millisecond stamp. */
 fun journalKey(event: CommuteEvent): String = "${event.type.name}@${event.timestamp}"
 
-/** One JSONL line for [event]. Keys are terse (t/s/ts/e/id) because this file is written on every
- * recorded event and kept for years. `id` is stored only to support [RecoveryJournal.remove]. */
+/** One JSONL line for [event]. Keys are terse (t/s/ts/e/x/id) because this file is written on every
+ * recorded event and kept for years. `id` is stored only to support [RecoveryJournal.remove], and
+ * `x` carries [CommuteEvent.excluded] so a recovery doesn't quietly reinstate records the user has
+ * taken out of their history. */
 fun encodeJournalLine(event: CommuteEvent): String = JSONObject().apply {
     put("id", event.id)
     put("t", event.type.name)
     put("s", event.ssid)
     put("ts", event.timestamp)
     put("e", event.endTimestamp ?: JSONObject.NULL)
+    put("x", event.excluded)
 }.toString()
 
 /** Parses a line written by [encodeJournalLine]; returns null for a blank or corrupt line so one
@@ -148,7 +151,9 @@ fun parseJournalLine(line: String): CommuteEvent? {
             type = CommuteEventType.valueOf(o.getString("t")),
             ssid = o.optString("s", ""),
             timestamp = o.getLong("ts"),
-            endTimestamp = if (o.isNull("e")) null else o.getLong("e")
+            endTimestamp = if (o.isNull("e")) null else o.getLong("e"),
+            // Absent in lines written before exclusion existed — those are all still on record.
+            excluded = o.optBoolean("x", false)
         )
     } catch (e: Exception) {
         null

@@ -1,7 +1,6 @@
 package com.commute.app.data
 
 import androidx.room.Dao
-import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
@@ -28,9 +27,6 @@ interface CommuteDao {
     @Update
     suspend fun update(event: CommuteEvent)
 
-    @Delete
-    suspend fun delete(event: CommuteEvent)
-
     @Query("DELETE FROM commute_events")
     suspend fun deleteAll()
 
@@ -40,6 +36,9 @@ interface CommuteDao {
     @Query("SELECT * FROM commute_events ORDER BY timestamp ASC")
     suspend fun getAllOnce(): List<CommuteEvent>
 
-    @Query("SELECT * FROM commute_events ORDER BY timestamp DESC LIMIT 1")
+    /** Newest event that still counts. Excluded rows are skipped: the service uses this as the
+     * floor for backdating and to spot a revertible auto-퇴근, and a record the user has taken out
+     * of their history shouldn't steer either. */
+    @Query("SELECT * FROM commute_events WHERE excluded = 0 ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLast(): CommuteEvent?
 }

@@ -29,12 +29,14 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Weekend
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -73,6 +75,11 @@ import com.commute.app.ble.isBluetoothOn
 import com.commute.app.ble.requiredBleScanPermissions
 import com.commute.app.ble.scanNearbyBeacons
 import com.commute.app.data.formatMinuteOfDayToHHmm
+import com.commute.app.update.UpdateStatus
+import com.commute.app.update.canRequestInstallPackages
+import com.commute.app.update.currentAppVersionName
+import com.commute.app.update.installApkIntent
+import com.commute.app.update.unknownSourcesSettingsIntent
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -101,7 +108,10 @@ fun SettingsScreen(
     val showWeekend by viewModel.showWeekend.collectAsState()
     val recoverableCount by viewModel.recoverableCount.collectAsState()
     val language by viewModel.language.collectAsState()
+    val updateStatus by viewModel.updateStatus.collectAsState()
     val s = LocalStrings.current
+    val context = LocalContext.current
+    val currentVersionName = remember { currentAppVersionName(context) }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let(viewModel::exportBackup)
@@ -135,6 +145,7 @@ fun SettingsScreen(
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(s.tabDetection) })
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text(s.tabRules) })
                 Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text(s.tabData) })
+                Tab(selected = selectedTab == 3, onClick = { selectedTab = 3 }, text = { Text(s.tabApp) })
             }
             when (selectedTab) {
                 0 -> SettingsTabColumn {
@@ -241,32 +252,6 @@ fun SettingsScreen(
                         )
                     }
 
-                    RuleCard(
-                        icon = Icons.Filled.Weekend,
-                        title = s.weekendTitle
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(if (showWeekend) s.shown else s.hidden)
-                            Switch(checked = showWeekend, onCheckedChange = viewModel::setShowWeekend)
-                        }
-                    }
-                }
-
-                else -> SettingsTabColumn {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Text(s.languageCardTitle, style = MaterialTheme.typography.titleSmall)
-                            }
-                            LanguageSelector(current = language, onSelect = viewModel::setLanguage)
-                        }
-                    }
-
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -279,7 +264,9 @@ fun SettingsScreen(
                             ) { Text(s.viewPolicy) }
                         }
                     }
+                }
 
+                2 -> SettingsTabColumn {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -336,6 +323,47 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                else -> SettingsTabColumn {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(s.languageCardTitle, style = MaterialTheme.typography.titleSmall)
+                            }
+                            LanguageSelector(current = language, onSelect = viewModel::setLanguage)
+                        }
+                    }
+
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(s.updateCardTitle, style = MaterialTheme.typography.titleSmall)
+                            }
+                            Text(
+                                s.currentVersionLabel(currentVersionName),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            UpdateStatusSection(status = updateStatus, viewModel = viewModel)
+                        }
+                    }
+
+                    RuleCard(
+                        icon = Icons.Filled.Weekend,
+                        title = s.weekendTitle
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(if (showWeekend) s.shown else s.hidden)
+                            Switch(checked = showWeekend, onCheckedChange = viewModel::setShowWeekend)
+                        }
+                    }
+                }
             }
 
             if (showResetDialog) {
@@ -354,6 +382,84 @@ fun SettingsScreen(
                         TextButton(onClick = { showResetDialog = false }) { Text(s.cancel) }
                     }
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The 앱 업데이트 card's body: a linear walk through [UpdateStatus] from idle, through checking
+ * GitHub, to downloading, to handing off to the system installer. Kept as its own composable
+ * (rather than inlined into the settings screen) because it owns two Context-driven side effects
+ * — the install intent and the "allow unknown apps" deep link — that don't belong on the
+ * ViewModel, which has no Activity to launch them from.
+ */
+@Composable
+private fun UpdateStatusSection(status: UpdateStatus, viewModel: CommuteViewModel) {
+    val s = LocalStrings.current
+    val context = LocalContext.current
+
+    when (status) {
+        is UpdateStatus.Idle -> {
+            Button(onClick = viewModel::checkForUpdate, modifier = Modifier.fillMaxWidth()) {
+                Text(s.checkForUpdate)
+            }
+        }
+        is UpdateStatus.Checking -> {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Text(s.checkingForUpdate, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        is UpdateStatus.UpToDate -> {
+            Text(s.upToDate, style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = viewModel::checkForUpdate, modifier = Modifier.fillMaxWidth()) {
+                Text(s.checkForUpdate)
+            }
+        }
+        is UpdateStatus.Available -> {
+            Text(s.updateAvailable(status.release.version), style = MaterialTheme.typography.bodyMedium)
+            // A release exists and the user is one tap from downloading it, but this device may
+            // never have granted "install unknown apps" — surfaced here rather than only after
+            // the download finishes, so it's not a surprise at the last step.
+            if (!canRequestInstallPackages(context)) {
+                Text(
+                    s.allowUnknownSourcesNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                OutlinedButton(
+                    onClick = { context.startActivity(unknownSourcesSettingsIntent(context)) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(s.openSettings) }
+            } else {
+                Button(
+                    onClick = { viewModel.downloadUpdate(status.release) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(s.downloadAndInstall) }
+            }
+        }
+        is UpdateStatus.Downloading -> {
+            Text(s.downloadingUpdate(status.percent), style = MaterialTheme.typography.bodyMedium)
+            LinearProgressIndicator(
+                progress = { status.percent / 100f },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        is UpdateStatus.ReadyToInstall -> {
+            Button(
+                onClick = { context.startActivity(installApkIntent(context, status.apkFile)) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(s.installNow) }
+        }
+        is UpdateStatus.Failed -> {
+            Text(
+                s.updateCheckFailed(status.message),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            OutlinedButton(onClick = viewModel::checkForUpdate, modifier = Modifier.fillMaxWidth()) {
+                Text(s.tryAgain)
             }
         }
     }

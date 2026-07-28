@@ -85,6 +85,7 @@ fun buildBackupJson(
                         put("ssid", event.ssid)
                         put("timestamp", event.timestamp)
                         put("endTimestamp", event.endTimestamp ?: JSONObject.NULL)
+                        put("excluded", event.excluded)
                     }
                 )
             }
@@ -160,7 +161,9 @@ fun parseBackupJson(json: String): ParsedBackup {
             type = CommuteEventType.valueOf(eventJson.getString("type")),
             ssid = eventJson.getString("ssid"),
             timestamp = eventJson.getLong("timestamp"),
-            endTimestamp = if (eventJson.isNull("endTimestamp")) null else eventJson.getLong("endTimestamp")
+            endTimestamp = if (eventJson.isNull("endTimestamp")) null else eventJson.getLong("endTimestamp"),
+            // Absent in backups predating exclusion — an older file's records are all still on record.
+            excluded = eventJson.optBoolean("excluded", false)
         )
     }
     // Absent in backups predating the leave feature — an older file simply has no leaves.

@@ -105,7 +105,7 @@ fun StatusTab(
     showWeekend: Boolean,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
-    onDeleteEvent: (CommuteEvent) -> Unit,
+    onExcludeEvent: (CommuteEvent) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
@@ -203,7 +203,7 @@ fun StatusTab(
             lunchEndMinute = lunchEndMinute,
             onAddEvent = onAddEvent,
             onUpdateEvent = onUpdateEvent,
-            onDeleteEvent = onDeleteEvent,
+            onExcludeEvent = onExcludeEvent,
             onDismiss = { selectedDay = null }
         )
     }
@@ -213,19 +213,22 @@ fun StatusTab(
 @Composable
 fun RecordsTab(
     events: List<CommuteEvent>,
+    excludedEvents: List<CommuteEvent>,
     missingRecords: List<MissingRecordFlag>,
     companySsid: String?,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
-    onDeleteEvent: (CommuteEvent) -> Unit,
+    onExcludeEvent: (CommuteEvent) -> Unit,
+    onRestoreEvent: (CommuteEvent) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
     var editingEvent by remember { mutableStateOf<CommuteEvent?>(null) }
     var addingEvent by remember { mutableStateOf(false) }
     var fixingFlag by remember { mutableStateOf<MissingRecordFlag?>(null) }
+    var showingExcluded by remember { mutableStateOf(false) }
 
     // Preset ranges instead of two hand-picked dates: one tap filters the list. The upper bound
     // is always open (today is included); each preset only sets the lower bound. 전체 = show all.
@@ -261,12 +264,20 @@ fun RecordsTab(
                     )
                 }
             }
+            // Only shown once something has actually been excluded — an empty-state button here
+            // at all times would be one more thing to explain on a screen most people never need it.
+            if (excludedEvents.isNotEmpty()) {
+                TextButton(
+                    onClick = { showingExcluded = true },
+                    modifier = Modifier.align(Alignment.End)
+                ) { Text(s.excludedRecordsButton(excludedEvents.size)) }
+            }
             if (missingRecords.isNotEmpty()) {
                 MissingRecordsBanner(missingRecords, onFix = { fixingFlag = it })
             }
             // Guards on the list alone, not on the banner too — with a missing-record flag
-            // present, an empty date range would otherwise render the edit hint above a blank
-            // list with no "이 기간에 기록이 없습니다" to explain it.
+            // present, an empty date range would otherwise render a blank list with no
+            // "이 기간에 기록이 없습니다" to explain it.
             if (filteredEvents.isEmpty()) {
                 Box(Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
                     Text(
@@ -275,12 +286,6 @@ fun RecordsTab(
                     )
                 }
             } else {
-                Text(
-                    s.recordsEditHint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-                )
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
@@ -305,7 +310,7 @@ fun RecordsTab(
             event = event,
             isNew = false,
             onSave = { updated -> onUpdateEvent(updated); editingEvent = null },
-            onDelete = { onDeleteEvent(event); editingEvent = null },
+            onDelete = { onExcludeEvent(event); editingEvent = null },
             onDismiss = { editingEvent = null }
         )
     }
@@ -331,7 +336,74 @@ fun RecordsTab(
             onDismiss = { fixingFlag = null }
         )
     }
+    if (showingExcluded) {
+        ExcludedRecordsDialog(
+            events = excludedEvents,
+            lunchStartMinute = lunchStartMinute,
+            lunchEndMinute = lunchEndMinute,
+            onRestore = onRestoreEvent,
+            onDismiss = { showingExcluded = false }
+        )
+    }
 
+}
+
+/** Lists every record the user has excluded from 기록보기, newest first, each with a one-tap
+ * restore — the counterpart to the exclude action in [EditEventDialog]. Closes itself once the
+ * last one is restored rather than leaving an empty dialog open. */
+@Composable
+private fun ExcludedRecordsDialog(
+    events: List<CommuteEvent>,
+    lunchStartMinute: Int,
+    lunchEndMinute: Int,
+    onRestore: (CommuteEvent) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val s = LocalStrings.current
+    LaunchedEffect(events.isEmpty()) {
+        if (events.isEmpty()) onDismiss()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text(s.close) } },
+        title = { Text(s.excludedRecordsTitle) },
+        text = {
+            if (events.isEmpty()) {
+                Text(s.noExcludedRecords, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    events.sortedByDescending { it.timestamp }.forEach { event ->
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        when (event.type) {
+                                            CommuteEventType.ARRIVE -> s.eventArrive
+                                            CommuteEventType.LEAVE -> s.eventLeave
+                                            CommuteEventType.AWAY -> s.eventAway
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        formatEventRangeText(event, lunchStartMinute, lunchEndMinute),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(onClick = { onRestore(event) }) { Text(s.restoreAction) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
 }
 
 /** Quick date-range filters for 기록 탭 — pick one instead of hand-entering start/end dates.
@@ -721,7 +793,7 @@ private fun DayDetailDialog(
     lunchEndMinute: Int,
     onAddEvent: (CommuteEvent) -> Unit,
     onUpdateEvent: (CommuteEvent) -> Unit,
-    onDeleteEvent: (CommuteEvent) -> Unit,
+    onExcludeEvent: (CommuteEvent) -> Unit,
     onDismiss: () -> Unit
 ) {
     val s = LocalStrings.current
@@ -782,7 +854,7 @@ private fun DayDetailDialog(
             event = event,
             isNew = false,
             onSave = { updated -> onUpdateEvent(updated); editingEvent = null },
-            onDelete = { onDeleteEvent(event); editingEvent = null },
+            onDelete = { onExcludeEvent(event); editingEvent = null },
             onDismiss = { editingEvent = null }
         )
     }

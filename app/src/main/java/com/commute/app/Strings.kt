@@ -65,6 +65,18 @@ interface Strings {
     val deleteIrreversible: String
     val searching: String
 
+    // --- 기록 exclude/restore (soft delete: hidden from 기록보기, kept in the DB, listable) ---
+    /** Button label for removing a record from 기록보기 — replaces [delete]'s label in that
+     * dialog only, since this action is reversible where a plain delete implies it isn't. */
+    val excludeAction: String
+    val reallyExclude: String
+    val excludeExplain: String
+    val restoreAction: String
+    /** e.g. "예외처리된 기록 (3)" / "Excluded records (3)" — opens the list of excluded records. */
+    fun excludedRecordsButton(n: Int): String
+    val excludedRecordsTitle: String
+    val noExcludedRecords: String
+
     // --- event types (RF-detected) ---
     val eventArrive: String
     val eventLeave: String
@@ -131,7 +143,6 @@ interface Strings {
     val rangeAll: String
     val noRecords: String
     val noRecordsInRange: String
-    val recordsEditHint: String
     val addMissingRecordDesc: String
     fun missingRecordsCount(n: Int): String
     fun leaveMissingMsg(range: String): String
@@ -168,6 +179,7 @@ interface Strings {
     val tabDetection: String
     val tabRules: String
     val tabData: String
+    val tabApp: String
     fun companyApTitle(count: Int): String
     val apNotRegisteredWarning: String
     fun registerVisibleAp(name: String): String
@@ -217,6 +229,21 @@ interface Strings {
     // --- policy document ---
     val policyTitle: String
     val policyDocDesc: String
+
+    // --- app update ---
+    val updateCardTitle: String
+    fun currentVersionLabel(version: String): String
+    val checkForUpdate: String
+    val checkingForUpdate: String
+    val upToDate: String
+    fun updateAvailable(version: String): String
+    val downloadAndInstall: String
+    fun downloadingUpdate(percent: Int): String
+    val installNow: String
+    fun updateCheckFailed(message: String?): String
+    val tryAgain: String
+    val allowUnknownSourcesNote: String
+    val openSettings: String
 
     // --- notifications / service ---
     val channelMonitorName: String
@@ -288,6 +315,14 @@ object KoStrings : Strings {
     override val delete = "삭제"
     override val reallyDelete = "정말 삭제"
     override val deleteIrreversible = "삭제하면 되돌릴 수 없습니다. 한 번 더 누르면 삭제됩니다."
+
+    override val excludeAction = "예외처리"
+    override val reallyExclude = "정말 예외처리"
+    override val excludeExplain = "예외처리하면 기록 목록과 근무시간 계산에서 빠집니다. 데이터는 남아 있어 나중에 다시 넣을 수 있습니다. 한 번 더 누르면 예외처리됩니다."
+    override val restoreAction = "복원"
+    override fun excludedRecordsButton(n: Int) = "예외처리된 기록 ($n)"
+    override val excludedRecordsTitle = "예외처리된 기록"
+    override val noExcludedRecords = "예외처리된 기록이 없습니다"
     override val searching = "검색 중..."
 
     override val eventArrive = "출근"
@@ -345,7 +380,6 @@ object KoStrings : Strings {
     override val rangeAll = "전체"
     override val noRecords = "기록이 없습니다."
     override val noRecordsInRange = "이 기간에 기록이 없습니다."
-    override val recordsEditHint = "기록을 눌러 잘못 인식된 유형이나 시각을 고치거나 삭제할 수 있습니다."
     override val addMissingRecordDesc = "빠진 기록 추가"
     override fun missingRecordsCount(n: Int) = "기록 누락 ${n}건"
     override fun leaveMissingMsg(range: String) = "$range 출근 이후 퇴근 기록 없음"
@@ -379,6 +413,7 @@ object KoStrings : Strings {
     override val tabDetection = "감지"
     override val tabRules = "근무 규칙"
     override val tabData = "데이터"
+    override val tabApp = "앱"
     override fun companyApTitle(count: Int) = "회사 AP 등록 (${count}대)"
     override val apNotRegisteredWarning = "AP가 등록되지 않아 와이파이 이름만으로 감지합니다. 같은 이름의 다른 와이파이도 회사로 인식될 수 있으니, 회사에서 아래 버튼을 눌러 등록하세요."
     override fun registerVisibleAp(name: String) = "지금 보이는 $name AP 등록"
@@ -427,6 +462,20 @@ object KoStrings : Strings {
 
     override val policyTitle = "가산 연구소 운영 방안"
     override val policyDocDesc = "가산 연구소 운영 방안 문서"
+
+    override val updateCardTitle = "앱 업데이트"
+    override fun currentVersionLabel(version: String) = "현재 버전: $version"
+    override val checkForUpdate = "업데이트 확인"
+    override val checkingForUpdate = "확인 중…"
+    override val upToDate = "최신 버전입니다"
+    override fun updateAvailable(version: String) = "새 버전 $version 사용 가능"
+    override val downloadAndInstall = "다운로드 후 설치"
+    override fun downloadingUpdate(percent: Int) = "다운로드 중 (${percent}%)"
+    override val installNow = "설치"
+    override fun updateCheckFailed(message: String?) = "업데이트 확인 실패: $message"
+    override val tryAgain = "다시 시도"
+    override val allowUnknownSourcesNote = "설치하려면 \"출처를 알 수 없는 앱 설치\"를 이 앱에 허용해야 합니다."
+    override val openSettings = "설정 열기"
 
     override val channelMonitorName = "출퇴근 감지 서비스"
     override val channelEventName = "출퇴근 기록 알림"
@@ -508,6 +557,14 @@ object EnStrings : Strings {
     override val delete = "Delete"
     override val reallyDelete = "Delete?"
     override val deleteIrreversible = "This can't be undone. Tap again to delete."
+
+    override val excludeAction = "Exclude"
+    override val reallyExclude = "Exclude?"
+    override val excludeExplain = "Excluding removes this from the record list and worked-time totals. The data stays, so it can be brought back later. Tap again to exclude."
+    override val restoreAction = "Restore"
+    override fun excludedRecordsButton(n: Int) = "Excluded records ($n)"
+    override val excludedRecordsTitle = "Excluded records"
+    override val noExcludedRecords = "No excluded records"
     override val searching = "Searching..."
 
     override val eventArrive = "Clock in"
@@ -565,7 +622,6 @@ object EnStrings : Strings {
     override val rangeAll = "All"
     override val noRecords = "No records."
     override val noRecordsInRange = "No records in this range."
-    override val recordsEditHint = "Tap a record to correct its type or time, or delete it."
     override val addMissingRecordDesc = "Add missing record"
     override fun missingRecordsCount(n: Int) = "$n missing record${if (n == 1) "" else "s"}"
     override fun leaveMissingMsg(range: String) = "No clock-out after clock-in on $range"
@@ -599,6 +655,7 @@ object EnStrings : Strings {
     override val tabDetection = "Detection"
     override val tabRules = "Work rules"
     override val tabData = "Data"
+    override val tabApp = "App"
     override fun companyApTitle(count: Int) = "Office APs ($count)"
     override val apNotRegisteredWarning = "No AP registered, so detection uses the Wi-Fi name only. A different network with the same name could be mistaken for the office — tap the button below while at the office to register."
     override fun registerVisibleAp(name: String) = "Register visible $name APs"
@@ -647,6 +704,20 @@ object EnStrings : Strings {
 
     override val policyTitle = "Lab operating policy"
     override val policyDocDesc = "Lab operating policy document"
+
+    override val updateCardTitle = "App update"
+    override fun currentVersionLabel(version: String) = "Current version: $version"
+    override val checkForUpdate = "Check for update"
+    override val checkingForUpdate = "Checking…"
+    override val upToDate = "You're on the latest version"
+    override fun updateAvailable(version: String) = "Version $version is available"
+    override val downloadAndInstall = "Download & install"
+    override fun downloadingUpdate(percent: Int) = "Downloading ($percent%)"
+    override val installNow = "Install"
+    override fun updateCheckFailed(message: String?) = "Update check failed: $message"
+    override val tryAgain = "Try again"
+    override val allowUnknownSourcesNote = "To install, allow \"install unknown apps\" for this app."
+    override val openSettings = "Open settings"
 
     override val channelMonitorName = "Commute detection service"
     override val channelEventName = "Commute record alerts"
