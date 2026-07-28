@@ -284,6 +284,15 @@ class WifiMonitorService : Service() {
             val presenceLabel = companySsid?.takeUnless { it.isBlank() } ?: beaconId ?: "회사"
 
             val companyBssids = settingsRepository.companyBssids.first()
+            // Keeps the OS's scan cache fresh even while we're *not* actually connected to the
+            // office AP (Wi-Fi off, on LTE, or associated with something else) — detectCompanyWifi
+            // below only reads that cache, and relying solely on whatever other apps or the
+            // system's own passive scanning happen to trigger left detection laggy exactly when
+            // it mattered most: someone in range but not connected. Fire-and-forget, and its
+            // results land in time for a *later* poll, not this one — one request per 60s poll is
+            // far under Android's throttling budget (throttling exempts a running foreground
+            // service anyway), unlike the old assumption that it "would add little freshness".
+            if (wifiRegistered) requestWifiScan(applicationContext)
             val wifiDetection = if (wifiRegistered) {
                 detectCompanyWifi(applicationContext, companySsid!!, companyBssids)
             } else {

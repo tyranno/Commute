@@ -28,10 +28,13 @@ fun currentWifiSsid(context: Context): String? {
 /**
  * Whether the company's Wi-Fi shows up among nearby access points in the device's last Wi-Fi
  * scan, regardless of whether the phone is actually connected to it. Used for commute detection:
- * the user wants "walked into range" to count as 출근, not "actively connected to that AP".
- * Reads the OS's cached scan results (populated by the system's own periodic scanning) rather
- * than calling [WifiManager.startScan], which is heavily throttled on Android 9+ and would add
- * little freshness on a 1-minute poll interval anyway. Requires ACCESS_FINE_LOCATION.
+ * the user wants "walked into range" to count as 출근, not "actively connected to that AP" — in
+ * range but never associated (Wi-Fi off, on LTE, or connected elsewhere) must still count. This
+ * function itself only reads the OS's cached scan results rather than triggering a scan of its
+ * own; [com.commute.app.wifi.WifiMonitorService] is the one keeping that cache fresh (see
+ * [requestWifiScan]) by requesting one every poll — cheap enough at a 1-minute interval to be
+ * worth doing rather than depending entirely on whatever scanning happens to occur elsewhere.
+ * Requires ACCESS_FINE_LOCATION.
  *
  * Identity is the AP's **BSSID** (its hardware MAC), not just the SSID name, whenever
  * [companyBssids] is non-empty. SSID alone is merely a label and common defaults like "iptime5G"
@@ -161,11 +164,13 @@ private fun String.isUsableBssid(): Boolean =
     isNotBlank() && this != "00:00:00:00:00:00" && this != "02:00:00:00:00:00"
 
 /**
- * Best-effort request for a fresh Wi-Fi scan. Only meant for the explicit, user-initiated
- * "search for nearby networks to register" flow — unlike [isCompanyWifiNearby]'s background
- * polling, a single manual tap won't hit Android 9+'s scan-throttling limits. The call may be
- * silently ignored by the OS (throttled or otherwise); callers should just re-read
- * [nearbyWifiSsids] shortly after rather than depend on this succeeding.
+ * Best-effort request for a fresh Wi-Fi scan — used both for the explicit, user-initiated "search
+ * for nearby networks to register" flow, and once per poll from [com.commute.app.wifi.WifiMonitorService]
+ * to keep the scan cache [detectCompanyWifi] reads from going stale while not actually connected to
+ * the office AP. Neither call site is anywhere near Android 9+'s scan-throttling limits (a single
+ * manual tap, or one request per 60s from a running foreground service). The call may still be
+ * silently ignored by the OS; callers should treat a fresher read shortly after as a bonus, not a
+ * guarantee.
  */
 @Suppress("DEPRECATION")
 fun requestWifiScan(context: Context) {
