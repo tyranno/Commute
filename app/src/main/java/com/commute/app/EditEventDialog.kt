@@ -51,6 +51,13 @@ import java.util.TimeZone
  * [CommuteViewModel.excludeEvent]. Date/time are picked with the platform's own DatePicker/TimePicker
  * (well-known, familiar components) rather than typed as free text, so there's no invalid-format
  * guessing.
+ *
+ * [otherEventsForDuplicateCheck] guards a *blank* add against creating a second 출근 or 퇴근 on a
+ * day that already has one — a free-form add has no idea a day is already fully accounted for, so
+ * without this a stray tap quietly produces an orphaned duplicate that then throws off that day's
+ * session pairing. Left empty (the default) for the 기록 누락 "수정" flow, which targets a specific
+ * detected gap and must stay unrestricted — an orphan LEAVE on a day that already has an unrelated
+ * ARRIVE/LEAVE pair (a genuine multi-session day) still legitimately needs its own new ARRIVE.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,7 +66,8 @@ fun EditEventDialog(
     isNew: Boolean,
     onSave: (CommuteEvent) -> Unit,
     onDelete: (() -> Unit)?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    otherEventsForDuplicateCheck: List<CommuteEvent> = emptyList()
 ) {
     var type by remember(event) { mutableStateOf(event.type) }
     var dateMillis by remember(event) { mutableStateOf(startOfDay(event.timestamp)) }
@@ -69,6 +77,11 @@ fun EditEventDialog(
     var endHour by remember(event) { mutableStateOf(hourOf(endReference)) }
     var endMinute by remember(event) { mutableStateOf(minuteOf(endReference)) }
     var confirmingDelete by remember { mutableStateOf(false) }
+
+    // Only meaningful for a blank add of 출근/퇴근 — 자리비움 has no such uniqueness expectation,
+    // and an edit of an existing record is never "duplicating" anything.
+    val duplicateOfSameDay = isNew && type != CommuteEventType.AWAY &&
+        otherEventsForDuplicateCheck.any { it.type == type && startOfDay(it.timestamp) == dateMillis }
 
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
@@ -121,6 +134,13 @@ fun EditEventDialog(
                         )
                     }
                 }
+                if (duplicateOfSameDay) {
+                    Text(
+                        if (type == CommuteEventType.ARRIVE) s.duplicateArriveError else s.duplicateLeaveError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 if (confirmingDelete) {
                     Text(
                         s.excludeExplain,
@@ -131,14 +151,17 @@ fun EditEventDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val timestamp = combineDateTime(dateMillis, hour, minute)
-                val endTimestamp = if (type == CommuteEventType.AWAY) combineDateTime(dateMillis, endHour, endMinute) else null
-                val valid = type != CommuteEventType.AWAY || (endTimestamp != null && endTimestamp > timestamp)
-                if (valid) {
-                    onSave(event.copy(type = type, timestamp = timestamp, endTimestamp = endTimestamp))
+            TextButton(
+                enabled = !duplicateOfSameDay,
+                onClick = {
+                    val timestamp = combineDateTime(dateMillis, hour, minute)
+                    val endTimestamp = if (type == CommuteEventType.AWAY) combineDateTime(dateMillis, endHour, endMinute) else null
+                    val valid = type != CommuteEventType.AWAY || (endTimestamp != null && endTimestamp > timestamp)
+                    if (valid) {
+                        onSave(event.copy(type = type, timestamp = timestamp, endTimestamp = endTimestamp))
+                    }
                 }
-            }) { Text(if (isNew) s.add else s.save) }
+            ) { Text(if (isNew) s.add else s.save) }
         },
         dismissButton = {
             Row {

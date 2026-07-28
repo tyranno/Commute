@@ -324,7 +324,8 @@ fun RecordsTab(
             isNew = true,
             onSave = { created -> onAddEvent(created); addingEvent = false },
             onDelete = null,
-            onDismiss = { addingEvent = false }
+            onDismiss = { addingEvent = false },
+            otherEventsForDuplicateCheck = events
         )
     }
     fixingFlag?.let { flag ->
@@ -864,7 +865,8 @@ private fun DayDetailDialog(
             isNew = true,
             onSave = { created -> onAddEvent(created); addingEvent = false },
             onDelete = null,
-            onDismiss = { addingEvent = false }
+            onDismiss = { addingEvent = false },
+            otherEventsForDuplicateCheck = events
         )
     }
 }

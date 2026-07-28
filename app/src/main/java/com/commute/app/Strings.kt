@@ -163,6 +163,10 @@ interface Strings {
     val startLabel: String
     val endLabel: String
     val endAfterStart: String
+    /** Shown when a blank "add" would create a second 출근/퇴근 on a day that already has one —
+     * guides the user to edit the existing record instead of duplicating it. */
+    val duplicateArriveError: String
+    val duplicateLeaveError: String
     val noteOptional: String
     val startTimePickerTitle: String
     val endTimePickerTitle: String
@@ -399,6 +403,8 @@ object KoStrings : Strings {
     override val startLabel = "시작"
     override val endLabel = "종료"
     override val endAfterStart = "종료 시각은 시작 시각보다 늦어야 합니다."
+    override val duplicateArriveError = "이 날짜에 이미 출근 기록이 있습니다. 기존 기록을 눌러 수정해주세요."
+    override val duplicateLeaveError = "이 날짜에 이미 퇴근 기록이 있습니다. 기존 기록을 눌러 수정해주세요."
     override val noteOptional = "메모 (선택)"
     override val startTimePickerTitle = "시작 시각 선택"
     override val endTimePickerTitle = "종료 시각 선택"
@@ -641,6 +647,8 @@ object EnStrings : Strings {
     override val startLabel = "Start"
     override val endLabel = "End"
     override val endAfterStart = "End time must be after start time."
+    override val duplicateArriveError = "This day already has a clock-in record. Tap it to edit instead."
+    override val duplicateLeaveError = "This day already has a clock-out record. Tap it to edit instead."
     override val noteOptional = "Note (optional)"
     override val startTimePickerTitle = "Select start time"
     override val endTimePickerTitle = "Select end time"
