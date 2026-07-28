@@ -192,7 +192,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         settingsRepository.lunchStartMinute,
         settingsRepository.lunchEndMinute
     ) { base, leaveList, lunchStart, lunchEnd ->
-        mergeLeaveStats(base, leaveList, lunchStart, lunchEnd)
+        mergeLeaveStats(base, leaveList, lunchStart, lunchEnd, System.currentTimeMillis())
     }
         // viewModelScope is Main.immediate, so without this the whole history is re-crunched on
         // the UI thread every minute — fine today, but it grows with every recorded day.

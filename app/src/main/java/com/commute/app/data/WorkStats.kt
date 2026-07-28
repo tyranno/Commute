@@ -97,15 +97,24 @@ private fun minuteWindowOverlap(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int):
  * attendance (a plain 연차) has no ARRIVE/LEAVE, so [computeDailyWorkStats] emits nothing for it —
  * those days are added here so they still count toward totals and get a chart bar. Same-day leaves
  * sum, but the credit is capped at one full standard day so 연차+반차 can't read as more than 8h.
+ *
+ * Only leave for [nowMillis]'s day or earlier is credited — a 연차 declared for a day that hasn't
+ * arrived yet is a plan, not time actually taken off, so it shouldn't inflate 이번주 총 근무시간
+ * before the week even gets there. It still reaches the chart, though: that reads the raw [leaves]
+ * list directly rather than this function's output, so a future 연차 still shows as a planned block
+ * on its day — only the *credited* total waits for the day to actually arrive.
  */
 fun mergeLeaveStats(
     base: List<DailyWorkStat>,
     leaves: List<LeaveEntry>,
     lunchStartMinute: Int,
-    lunchEndMinute: Int
+    lunchEndMinute: Int,
+    nowMillis: Long
 ): List<DailyWorkStat> {
     if (leaves.isEmpty()) return base
+    val today = startOfDay(nowMillis)
     val creditByDay = leaves
+        .filter { startOfDay(it.date) <= today }
         .groupBy { startOfDay(it.date) }
         .mapValues { (_, dayLeaves) ->
             dayLeaves.sumOf { leaveCreditMinutes(it.type, it.startMinute, it.endMinute, lunchStartMinute, lunchEndMinute) }
