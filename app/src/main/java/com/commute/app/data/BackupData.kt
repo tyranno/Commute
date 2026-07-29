@@ -17,10 +17,9 @@ private const val BACKUP_FORMAT_VERSION = 1
  * matching exists to prevent.
  */
 data class BackupSettings(
-    val companySsid: String?,
-    val companyBssids: Set<String>,
+    val companyNetworks: List<CompanyNetwork>,
     val bleEnabled: Boolean,
-    val companyBeaconId: String?,
+    val companyBeaconIds: List<String>,
     val monitoringEnabled: Boolean,
     val absenceThresholdMinutes: Int,
     val autoLeaveAfterAwayMinutes: Int,
@@ -57,10 +56,21 @@ fun buildBackupJson(
     root.put(
         "settings",
         JSONObject().apply {
-            put("companySsid", settings.companySsid ?: JSONObject.NULL)
-            put("companyBssids", JSONArray().apply { settings.companyBssids.forEach { put(it) } })
+            put(
+                "companyNetworks",
+                JSONArray().apply {
+                    settings.companyNetworks.forEach { network ->
+                        put(
+                            JSONObject().apply {
+                                put("ssid", network.ssid)
+                                put("bssids", JSONArray().apply { network.bssids.forEach { put(it) } })
+                            }
+                        )
+                    }
+                }
+            )
             put("bleEnabled", settings.bleEnabled)
-            put("companyBeaconId", settings.companyBeaconId ?: JSONObject.NULL)
+            put("companyBeaconIds", JSONArray().apply { settings.companyBeaconIds.forEach { put(it) } })
             put("monitoringEnabled", settings.monitoringEnabled)
             put("absenceThresholdMinutes", settings.absenceThresholdMinutes)
             put("autoLeaveAfterAwayMinutes", settings.autoLeaveAfterAwayMinutes)
@@ -117,17 +127,40 @@ fun parseBackupJson(json: String): ParsedBackup {
     val root = JSONObject(json)
     val settingsJson = root.getJSONObject("settings")
     val settings = BackupSettings(
-        companySsid = if (settingsJson.isNull("companySsid")) null else settingsJson.optString("companySsid", "").ifBlank { null },
-        // Absent in v1 backups — an older file legitimately has no BSSIDs, and an empty set is
-        // exactly the "not registered yet" state, so defaulting to empty is correct here.
-        companyBssids = settingsJson.optJSONArray("companyBssids")?.let { array ->
-            (0 until array.length()).mapNotNull { array.optString(it, "").ifBlank { null } }.toSet()
-        } ?: emptySet(),
+        // "companyNetworks" is the current format; a backup written before multi-network support
+        // only has the singular "companySsid"/"companyBssids" pair, which becomes a one-entry list
+        // here so restoring an old file doesn't silently drop the registered office network.
+        companyNetworks = settingsJson.optJSONArray("companyNetworks")?.let { array ->
+            (0 until array.length()).map { i ->
+                val entry = array.getJSONObject(i)
+                val bssids = entry.optJSONArray("bssids")?.let { b ->
+                    (0 until b.length()).mapNotNull { b.optString(it, "").ifBlank { null } }.toSet()
+                } ?: emptySet()
+                CompanyNetwork(ssid = entry.getString("ssid"), bssids = bssids)
+            }
+        } ?: run {
+            val legacySsid = if (settingsJson.isNull("companySsid")) null
+                else settingsJson.optString("companySsid", "").ifBlank { null }
+            if (legacySsid == null) emptyList() else {
+                val legacyBssids = settingsJson.optJSONArray("companyBssids")?.let { array ->
+                    (0 until array.length()).mapNotNull { array.optString(it, "").ifBlank { null } }.toSet()
+                } ?: emptySet()
+                listOf(CompanyNetwork(legacySsid, legacyBssids))
+            }
+        },
         // Absent in backups predating BLE support — default to off/unregistered, the same as a
         // fresh install that never opted into beacon detection.
         bleEnabled = settingsJson.optBoolean("bleEnabled", false),
-        companyBeaconId = if (settingsJson.isNull("companyBeaconId")) null
-            else settingsJson.optString("companyBeaconId", "").ifBlank { null },
+        // "companyBeaconIds" is the current format; a backup written before multi-beacon support
+        // only has the singular "companyBeaconId", which becomes a one-entry list here so
+        // restoring an old file doesn't silently drop the registered beacon.
+        companyBeaconIds = settingsJson.optJSONArray("companyBeaconIds")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it, "").ifBlank { null } }
+        } ?: run {
+            val legacy = if (settingsJson.isNull("companyBeaconId")) null
+                else settingsJson.optString("companyBeaconId", "").ifBlank { null }
+            if (legacy == null) emptyList() else listOf(legacy)
+        },
         monitoringEnabled = settingsJson.optBoolean("monitoringEnabled", false),
         absenceThresholdMinutes = settingsJson.optInt(
             "absenceThresholdMinutes",

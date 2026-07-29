@@ -17,10 +17,16 @@ private val Context.dataStore by preferencesDataStore(name = "commute_settings")
 class SettingsRepository(private val context: Context) {
 
     private object Keys {
+        // Legacy single-network keys — read-only now, kept solely so [companyNetworks] can carry
+        // forward a registration made before multi-network support existed. Never written again.
         val COMPANY_SSID = stringPreferencesKey("company_ssid")
         val COMPANY_BSSIDS = stringSetPreferencesKey("company_bssids")
+        val COMPANY_NETWORKS = stringPreferencesKey("company_networks")
         val BLE_ENABLED = booleanPreferencesKey("ble_enabled")
+        // Legacy single-beacon key — read-only now, kept solely so [companyBeaconIds] can carry
+        // forward a registration made before multi-beacon support existed. Never written again.
         val COMPANY_BEACON_ID = stringPreferencesKey("company_beacon_id")
+        val COMPANY_BEACON_IDS = stringPreferencesKey("company_beacon_ids")
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
         val IS_AT_WORK = booleanPreferencesKey("is_at_work")
         val LAST_SEEN_AT = longPreferencesKey("last_seen_at")
@@ -46,23 +52,43 @@ class SettingsRepository(private val context: Context) {
      * the device language is English. Stored as the language tag; unknown/absent → SYSTEM. */
     val language: Flow<AppLanguage> = context.dataStore.data.map { AppLanguage.fromTag(it[Keys.LANGUAGE]) }
 
-    val companySsid: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_SSID] }
-
-    /** BSSIDs (AP hardware addresses) that count as "the office" — an SSID name alone isn't
-     * unique enough, since common defaults like "iptime5G" exist in many buildings. A set, not a
-     * single value, because an office usually runs several APs on the same SSID. Empty means
-     * "registered before BSSID matching existed", which falls back to SSID-only detection. */
-    val companyBssids: Flow<Set<String>> = context.dataStore.data.map { it[Keys.COMPANY_BSSIDS] ?: emptySet() }
+    /** Every registered office Wi-Fi network — checked with OR (see [detectCompanyNetworks][com.commute.app.wifi.detectCompanyNetworks]),
+     * the same way Wi-Fi and BLE presence are already OR'd together. Falls back to a single-element
+     * list built from the legacy company_ssid/company_bssids keys when company_networks has never
+     * been written — an install from before multi-network support — so an existing registration
+     * isn't silently lost the first time this is read after the app updates. */
+    val companyNetworks: Flow<List<CompanyNetwork>> = context.dataStore.data.map { prefs ->
+        val json = prefs[Keys.COMPANY_NETWORKS]
+        if (json != null) {
+            decodeCompanyNetworks(json)
+        } else {
+            val legacySsid = prefs[Keys.COMPANY_SSID]
+            if (legacySsid.isNullOrBlank()) emptyList()
+            else listOf(CompanyNetwork(legacySsid, prefs[Keys.COMPANY_BSSIDS] ?: emptySet()))
+        }
+    }
 
     /** Whether to detect the office by a Bluetooth beacon *in parallel* with Wi-Fi — either signal
      * counts as present, so being in Wi-Fi range or near the beacon is enough. Off by default; the
      * beacon (a laptop dongle or ESP32, see doc/ble-beacon) is opt-in extra hardware. */
     val bleEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.BLE_ENABLED] ?: false }
 
-    /** The registered office beacon's manufacturer-payload token (e.g. "COMMUTE1") — the stable
-     * identity a scan matches on, since the advertiser's MAC rotates. The BLE analogue of
-     * [companySsid]; null means no beacon registered yet. */
-    val companyBeaconId: Flow<String?> = context.dataStore.data.map { it[Keys.COMPANY_BEACON_ID] }
+    /** Every registered office beacon's manufacturer-payload token (e.g. "COMMUTE1") — the stable
+     * identity a scan matches on, since the advertiser's MAC rotates. Checked with OR, mirroring
+     * [companyNetworks]: an office can run more than one beacon (covering separate rooms/floors,
+     * or a spare while an ESP32 is swapped in), and being near any one of them counts as present.
+     * Falls back to a single-element list built from the legacy company_beacon_id key when
+     * company_beacon_ids has never been written, so an existing registration isn't silently lost
+     * the first time this is read after the app updates. */
+    val companyBeaconIds: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        val json = prefs[Keys.COMPANY_BEACON_IDS]
+        if (json != null) {
+            decodeStringList(json)
+        } else {
+            val legacy = prefs[Keys.COMPANY_BEACON_ID]
+            if (legacy.isNullOrBlank()) emptyList() else listOf(legacy)
+        }
+    }
     val monitoringEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.MONITORING_ENABLED] ?: false }
     val isAtWork: Flow<Boolean> = context.dataStore.data.map { it[Keys.IS_AT_WORK] ?: false }
     val lastSeenAt: Flow<Long?> = context.dataStore.data.map { it[Keys.LAST_SEEN_AT] }
@@ -139,24 +165,16 @@ class SettingsRepository(private val context: Context) {
     val halfPmStartMinute: Flow<Int> = context.dataStore.data.map { it[Keys.HALF_PM_START_MINUTE] ?: DEFAULT_HALF_PM_START_MINUTE }
     val halfPmEndMinute: Flow<Int> = context.dataStore.data.map { it[Keys.HALF_PM_END_MINUTE] ?: DEFAULT_HALF_PM_END_MINUTE }
 
-    suspend fun setCompanySsid(ssid: String) {
-        context.dataStore.edit { it[Keys.COMPANY_SSID] = ssid }
-    }
-
-    suspend fun setCompanyBssids(bssids: Set<String>) {
-        context.dataStore.edit { it[Keys.COMPANY_BSSIDS] = bssids }
+    suspend fun setCompanyNetworks(networks: List<CompanyNetwork>) {
+        context.dataStore.edit { it[Keys.COMPANY_NETWORKS] = encodeCompanyNetworks(networks) }
     }
 
     suspend fun setBleEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.BLE_ENABLED] = enabled }
     }
 
-    suspend fun setCompanyBeaconId(token: String) {
-        context.dataStore.edit { it[Keys.COMPANY_BEACON_ID] = token }
-    }
-
-    suspend fun clearCompanyBeaconId() {
-        context.dataStore.edit { it.remove(Keys.COMPANY_BEACON_ID) }
+    suspend fun setCompanyBeaconIds(tokens: List<String>) {
+        context.dataStore.edit { it[Keys.COMPANY_BEACON_IDS] = encodeStringList(tokens) }
     }
 
     suspend fun setMonitoringEnabled(enabled: Boolean) {

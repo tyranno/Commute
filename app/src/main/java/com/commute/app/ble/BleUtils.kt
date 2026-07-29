@@ -39,8 +39,17 @@ const val SEARCH_BEACON_SCAN_MILLIS = 4_000L
  * same [observedAt] (earliest sighting, for backdating an 출근) and [lastObservedAt] (latest
  * sighting, for backdating a 퇴근) so the two signals can be merged by [mergePresence] and fed
  * through the exact same arrive/away/leave machinery. Both stamps are null when nothing matched.
+ *
+ * [matchedToken] is which registered beacon actually produced the match — display-only, never
+ * used to decide presence itself. Null when nothing matched. When more than one registered beacon
+ * is seen at once, whichever was registered first wins the label; presence itself is unaffected.
  */
-data class CompanyBeaconDetection(val nearby: Boolean, val observedAt: Long?, val lastObservedAt: Long?)
+data class CompanyBeaconDetection(
+    val nearby: Boolean,
+    val observedAt: Long?,
+    val lastObservedAt: Long?,
+    val matchedToken: String? = null
+)
 
 /**
  * Combined presence across Wi-Fi and BLE: present if *either* signal sees the office, so the two
@@ -87,49 +96,57 @@ fun isBluetoothOn(context: Context): Boolean {
 }
 
 /**
- * Runs one bounded BLE scan and reports whether the office beacon [beaconToken] (its manufacturer
- * payload under [BEACON_COMPANY_ID]) was seen, and when. Unlike the Wi-Fi path there's no OS-cached
- * scan to read — BLE has to actively listen — so this suspends for [scanMillis] collecting matches,
- * then stops. Returns "not nearby" (all nulls) when Bluetooth is off, the permission is missing, or
- * nothing matched, so the caller never has to distinguish those from a real absence.
+ * Runs one bounded BLE scan and reports whether *any* registered office beacon in [beaconTokens]
+ * (its manufacturer payload under [BEACON_COMPANY_ID]) was seen, and when — mirroring
+ * [com.commute.app.wifi.detectCompanyNetworks]'s OR-across-registrations shape: an office can run
+ * more than one beacon, and being near any one of them counts as present. A single scan covers
+ * every registered token at once — scanning isn't per-token any more than Wi-Fi scanning is
+ * per-SSID. Unlike the Wi-Fi path there's no OS-cached scan to read — BLE has to actively listen —
+ * so this suspends for [scanMillis] collecting matches, then stops. Returns "not nearby" (all
+ * nulls) when Bluetooth is off, the permission is missing, or nothing matched, so the caller never
+ * has to distinguish those from a real absence.
  *
- * The filter pins the match to the manufacturer id *and* the exact token bytes, so an unrelated
+ * The filters pin the match to the manufacturer id *and* the exact token bytes, so an unrelated
  * 0xFFFF beacon elsewhere can't register as the office.
  */
 @SuppressLint("MissingPermission") // guarded by hasBleScanPermission() below
-suspend fun detectCompanyBeacon(
+suspend fun detectCompanyBeacons(
     context: Context,
-    beaconToken: String,
+    beaconTokens: List<String>,
     scanMillis: Long = DEFAULT_BEACON_SCAN_MILLIS
 ): CompanyBeaconDetection {
     val notNearby = CompanyBeaconDetection(nearby = false, observedAt = null, lastObservedAt = null)
-    if (beaconToken.isBlank() || !hasBleScanPermission(context)) return notNearby
+    val tokens = beaconTokens.filter { it.isNotBlank() }
+    if (tokens.isEmpty() || !hasBleScanPermission(context)) return notNearby
     val adapter = (context.applicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         ?: return notNearby
     if (!adapter.isEnabled) return notNearby
     val scanner = adapter.bluetoothLeScanner ?: return notNearby
 
-    val tokenBytes = beaconToken.toByteArray(Charsets.UTF_8)
-    val filter = ScanFilter.Builder()
-        .setManufacturerData(BEACON_COMPANY_ID, tokenBytes)
-        .build()
+    val tokenBytes = tokens.associateWith { it.toByteArray(Charsets.UTF_8) }
+    val filters = tokenBytes.values.map { bytes ->
+        ScanFilter.Builder().setManufacturerData(BEACON_COMPANY_ID, bytes).build()
+    }
     val settings = ScanSettings.Builder()
         .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
         .build()
 
-    val stamps = Collections.synchronizedList(mutableListOf<Long>())
+    // token -> every stamp it was seen at, so both the overall earliest/latest sighting and which
+    // token(s) actually matched (for the display label) come out of one scan pass.
+    val stampsByToken = Collections.synchronizedMap(mutableMapOf<String, MutableList<Long>>())
+    fun record(result: ScanResult) {
+        val bytes = result.scanRecord?.getManufacturerSpecificData(BEACON_COMPANY_ID) ?: return
+        val token = tokenBytes.entries.firstOrNull { it.value.contentEquals(bytes) }?.key ?: return
+        val stamp = result.wallClockSeenAt() ?: System.currentTimeMillis()
+        stampsByToken.getOrPut(token) { Collections.synchronizedList(mutableListOf()) }.add(stamp)
+    }
     val callback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            stamps.add(result.wallClockSeenAt() ?: System.currentTimeMillis())
-        }
-
-        override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            results.forEach { stamps.add(it.wallClockSeenAt() ?: System.currentTimeMillis()) }
-        }
+        override fun onScanResult(callbackType: Int, result: ScanResult) = record(result)
+        override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::record)
     }
 
     try {
-        scanner.startScan(listOf(filter), settings, callback)
+        scanner.startScan(filters, settings, callback)
         delay(scanMillis)
     } catch (e: Exception) {
         // SecurityException (permission revoked mid-flight) or IllegalStateException (adapter
@@ -143,10 +160,28 @@ suspend fun detectCompanyBeacon(
         }
     }
 
-    val seen = ArrayList(stamps)
-    if (seen.isEmpty()) return notNearby
-    return CompanyBeaconDetection(nearby = true, observedAt = seen.minOrNull(), lastObservedAt = seen.maxOrNull())
+    if (stampsByToken.isEmpty()) return notNearby
+    // Whichever registered token matched wins the label, preferring registration order — presence
+    // itself is unaffected either way, exactly like representativeCompanySsid.
+    val matchedToken = tokens.first { it in stampsByToken }
+    val allStamps = stampsByToken.values.flatten()
+    return CompanyBeaconDetection(
+        nearby = true,
+        observedAt = allStamps.minOrNull(),
+        lastObservedAt = allStamps.maxOrNull(),
+        matchedToken = matchedToken
+    )
 }
+
+/**
+ * A single label to show for potentially several registered beacons — status card and
+ * notifications only want one token at a glance, not a list. Prefers [matchedToken] (whichever
+ * beacon is actually detected right now), falling back to the first-registered token so there's
+ * still something to show when nothing is currently in range. Null only when no beacon is
+ * registered at all. Mirrors [com.commute.app.wifi.representativeCompanySsid].
+ */
+fun representativeCompanyBeacon(tokens: List<String>, matchedToken: String?): String? =
+    matchedToken ?: tokens.firstOrNull()
 
 /**
  * Scans briefly for *any* office-format beacon (manufacturer id [BEACON_COMPANY_ID]) and returns the

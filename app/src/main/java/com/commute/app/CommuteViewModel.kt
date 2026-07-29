@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.commute.app.data.BackupSettings
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
+import com.commute.app.data.CompanyNetwork
 import com.commute.app.data.DailyWorkStat
 import com.commute.app.data.LeaveEntry
 import com.commute.app.data.SettingsRepository
@@ -65,17 +66,14 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    val companySsid: StateFlow<String?> = settingsRepository.companySsid
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    val companyBssids: StateFlow<Set<String>> = settingsRepository.companyBssids
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    val companyNetworks: StateFlow<List<CompanyNetwork>> = settingsRepository.companyNetworks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val bleEnabled: StateFlow<Boolean> = settingsRepository.bleEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    val companyBeaconId: StateFlow<String?> = settingsRepository.companyBeaconId
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val companyBeaconIds: StateFlow<List<String>> = settingsRepository.companyBeaconIds
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val monitoringEnabled: StateFlow<Boolean> = settingsRepository.monitoringEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
@@ -241,15 +239,24 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         findMissingRecords(allEvents, System.currentTimeMillis())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Registers [ssid] as the office network and pins it to the APs currently broadcasting that
-     * name, so a same-named network somewhere else can't later be mistaken for the office. */
+    /** Registers [ssid] as an office network and pins it to the APs currently broadcasting that
+     * name, so a same-named network somewhere else can't later be mistaken for the office. Adds a
+     * new entry alongside any already-registered networks rather than replacing them — an office
+     * can span more than one physical network — but re-registering an SSID that's already on the
+     * list merges freshly-seen BSSIDs into its existing entry instead of duplicating it. */
     fun registerCompanySsid(ssid: String) {
         val app = getApplication<Application>()
         viewModelScope.launch {
-            settingsRepository.setCompanySsid(ssid)
-            val bssids = nearbyBssidsFor(app, ssid)
-            settingsRepository.setCompanyBssids(bssids)
-            if (bssids.isEmpty()) {
+            val found = nearbyBssidsFor(app, ssid)
+            val current = settingsRepository.companyNetworks.first()
+            val existing = current.firstOrNull { it.ssid == ssid }
+            val updated = if (existing != null) {
+                current.map { if (it.ssid == ssid) it.copy(bssids = it.bssids + found) else it }
+            } else {
+                current + CompanyNetwork(ssid, found)
+            }
+            settingsRepository.setCompanyNetworks(updated)
+            if (found.isEmpty()) {
                 // Registering from a stale scan list while out of range captures nothing, which
                 // silently falls back to name-only matching — the exact failure that logged a
                 // whole 출근/퇴근 pair off an unrelated "iptime5G". Say so instead of degrading quietly.
@@ -258,26 +265,23 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** Adds any currently-visible AP broadcasting the registered SSID to the known-office set —
-     * for offices whose other APs weren't in range at registration time, or newly added ones. */
-    fun addNearbyCompanyBssids() {
-        val app = getApplication<Application>()
-        val ssid = companySsid.value ?: return
+    /** Removes a batch of selected office-network rows in one shot. Each entry is (ssid, bssid);
+     * bssid == null means the whole network (an SSID-only entry with no individual AP to drop).
+     * Batched into a single read-modify-write so selecting several rows and deleting them together
+     * can't race — separate launches would each read the same pre-delete list and the last write to
+     * land would silently undo the others. */
+    fun removeCompanyEntries(entries: Set<Pair<String, String?>>) {
         viewModelScope.launch {
-            val found = nearbyBssidsFor(app, ssid)
-            if (found.isEmpty()) {
-                Toast.makeText(app, strings().apNotVisible(ssid), Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            val merged = settingsRepository.companyBssids.first() + found
-            settingsRepository.setCompanyBssids(merged)
-            Toast.makeText(app, strings().apRegistered(merged.size), Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun removeCompanyBssid(bssid: String) {
-        viewModelScope.launch {
-            settingsRepository.setCompanyBssids(settingsRepository.companyBssids.first() - bssid)
+            val wholeNetworkRemovals = entries.filter { it.second == null }.mapTo(mutableSetOf()) { it.first }
+            val bssidRemovals = entries.filter { it.second != null }.groupBy({ it.first }, { it.second!! })
+            val current = settingsRepository.companyNetworks.first()
+            val updated = current
+                .filterNot { it.ssid in wholeNetworkRemovals }
+                .map { network ->
+                    val toRemove = bssidRemovals[network.ssid]
+                    if (toRemove == null) network else network.copy(bssids = network.bssids - toRemove.toSet())
+                }
+            settingsRepository.setCompanyNetworks(updated)
         }
     }
 
@@ -287,14 +291,25 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepository.setBleEnabled(enabled) }
     }
 
-    /** Registers [token] (a beacon's manufacturer payload, e.g. "COMMUTE1") as the office beacon.
-     * The MAC isn't stored — it rotates — so this token is the whole identity. */
+    /** Registers [token] (a beacon's manufacturer payload, e.g. "COMMUTE1") as an additional office
+     * beacon — adds it alongside any already-registered ones rather than replacing them, the same
+     * way [registerCompanySsid] does for Wi-Fi networks. The MAC isn't stored — it rotates — so the
+     * token is the whole identity; re-registering one already on the list is a harmless no-op. */
     fun registerCompanyBeacon(token: String) {
-        viewModelScope.launch { settingsRepository.setCompanyBeaconId(token) }
+        viewModelScope.launch {
+            val current = settingsRepository.companyBeaconIds.first()
+            if (token !in current) settingsRepository.setCompanyBeaconIds(current + token)
+        }
     }
 
-    fun clearCompanyBeacon() {
-        viewModelScope.launch { settingsRepository.clearCompanyBeaconId() }
+    /** Un-registers a batch of beacons in one shot, leaving any other registered beacons in place.
+     * Batched (rather than one launch per token) for the same reason as [removeCompanyEntries]:
+     * separate launches would each read the same pre-delete list and the last write to land would
+     * silently undo the others. */
+    fun removeCompanyBeacons(tokens: Set<String>) {
+        viewModelScope.launch {
+            settingsRepository.setCompanyBeaconIds(settingsRepository.companyBeaconIds.first() - tokens)
+        }
     }
 
     fun setMonitoringEnabled(enabled: Boolean) {
@@ -442,10 +457,9 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 // only hold a value while something is subscribed, so a backup's correctness
                 // shouldn't depend on which screen happens to be composed right now.
                 val settings = BackupSettings(
-                    companySsid = settingsRepository.companySsid.first(),
-                    companyBssids = settingsRepository.companyBssids.first(),
+                    companyNetworks = settingsRepository.companyNetworks.first(),
                     bleEnabled = settingsRepository.bleEnabled.first(),
-                    companyBeaconId = settingsRepository.companyBeaconId.first(),
+                    companyBeaconIds = settingsRepository.companyBeaconIds.first(),
                     monitoringEnabled = settingsRepository.monitoringEnabled.first(),
                     absenceThresholdMinutes = settingsRepository.absenceThresholdMinutes.first(),
                     autoLeaveAfterAwayMinutes = settingsRepository.autoLeaveAfterAwayMinutes.first(),
@@ -499,10 +513,9 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 // forward too, without dropping journal entries the backup happened to omit.
                 withContext(Dispatchers.IO) { recoveryJournal.reconcile(dao.getAllOnce()) }
                 settingsRepository.clearSessionState()
-                parsed.settings.companySsid?.let { settingsRepository.setCompanySsid(it) }
-                settingsRepository.setCompanyBssids(parsed.settings.companyBssids)
+                settingsRepository.setCompanyNetworks(parsed.settings.companyNetworks)
                 settingsRepository.setBleEnabled(parsed.settings.bleEnabled)
-                parsed.settings.companyBeaconId?.let { settingsRepository.setCompanyBeaconId(it) }
+                settingsRepository.setCompanyBeaconIds(parsed.settings.companyBeaconIds)
                 settingsRepository.setAbsenceThresholdMinutes(parsed.settings.absenceThresholdMinutes)
                 settingsRepository.setAutoLeaveAfterAwayMinutes(parsed.settings.autoLeaveAfterAwayMinutes)
                 settingsRepository.setLeaveMarginMinutes(parsed.settings.leaveMarginMinutes)
@@ -512,7 +525,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 settingsRepository.setHalfDayAmWindow(parsed.settings.halfAmStartMinute, parsed.settings.halfAmEndMinute)
                 settingsRepository.setHalfDayPmWindow(parsed.settings.halfPmStartMinute, parsed.settings.halfPmEndMinute)
                 setMonitoringEnabled(parsed.settings.monitoringEnabled)
-                val apNote = if (parsed.settings.companyBssids.isEmpty() && parsed.settings.companySsid != null) {
+                val apNote = if (parsed.settings.companyNetworks.any { it.bssids.isEmpty() }) {
                     s.restoreApNote
                 } else {
                     ""

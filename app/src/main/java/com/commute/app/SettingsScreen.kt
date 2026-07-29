@@ -35,6 +35,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -84,6 +85,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** One line of the registered-network list: an SSID paired with one of its BSSIDs, or (when
+ * [bssid] is null) a network that has no BSSID pinned yet — in that case the SSID *is* the whole
+ * entry, so removing this row un-registers the network rather than trimming one AP from it. */
+private data class ApRow(val ssid: String, val bssid: String?)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -91,10 +97,9 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     onOpenPolicyDocument: () -> Unit = {}
 ) {
-    val companySsid by viewModel.companySsid.collectAsState()
-    val companyBssids by viewModel.companyBssids.collectAsState()
+    val companyNetworks by viewModel.companyNetworks.collectAsState()
     val bleEnabled by viewModel.bleEnabled.collectAsState()
-    val companyBeaconId by viewModel.companyBeaconId.collectAsState()
+    val companyBeaconIds by viewModel.companyBeaconIds.collectAsState()
     val absenceThresholdMinutes by viewModel.absenceThresholdMinutes.collectAsState()
     val autoLeaveAfterAwayMinutes by viewModel.autoLeaveAfterAwayMinutes.collectAsState()
     val leaveMarginMinutes by viewModel.leaveMarginMinutes.collectAsState()
@@ -149,34 +154,75 @@ fun SettingsScreen(
             }
             when (selectedTab) {
                 0 -> SettingsTabColumn {
+                    var showWifiSearch by remember { mutableStateOf(false) }
+                    // One row per BSSID (an office can span more than one AP, or more than one
+                    // Wi-Fi name), plus one row for a network that has no BSSIDs pinned yet — its
+                    // ssid is the whole entry, so removing that row un-registers the network.
+                    var selectedApRows by remember { mutableStateOf(setOf<ApRow>()) }
+                    val apRows = remember(companyNetworks) {
+                        companyNetworks.flatMap { network ->
+                            if (network.bssids.isEmpty()) listOf(ApRow(network.ssid, null))
+                            else network.bssids.sorted().map { ApRow(network.ssid, it) }
+                        }
+                    }
                     RuleCard(
                         icon = Icons.Filled.Router,
-                        title = s.companyApTitle(companyBssids.size)
+                        title = s.companyApTitle(companyNetworks.sumOf { it.bssids.size })
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (companyBssids.isEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (apRows.isEmpty()) {
                                 Text(
                                     s.apNotRegisteredWarning,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error
                                 )
                             } else {
-                                companyBssids.sorted().forEach { bssid ->
+                                apRows.forEach { row ->
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                selectedApRows = if (row in selectedApRows) {
+                                                    selectedApRows - row
+                                                } else {
+                                                    selectedApRows + row
+                                                }
+                                            },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
-                                        Text(bssid, style = MaterialTheme.typography.bodyMedium)
-                                        TextButton(onClick = { viewModel.removeCompanyBssid(bssid) }) { Text(s.delete) }
+                                        Checkbox(
+                                            checked = row in selectedApRows,
+                                            onCheckedChange = { checked ->
+                                                selectedApRows = if (checked) selectedApRows + row else selectedApRows - row
+                                            }
+                                        )
+                                        Text(
+                                            if (row.bssid != null) "${row.ssid}  ·  ${row.bssid}" else row.ssid,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
+                                if (selectedApRows.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.removeCompanyEntries(selectedApRows.mapTo(mutableSetOf()) { it.ssid to it.bssid })
+                                            selectedApRows = emptySet()
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            s.deleteSelectedAction(selectedApRows.size),
+                                            color = MaterialTheme.colorScheme.error
+                                        )
                                     }
                                 }
                             }
                             OutlinedButton(
-                                onClick = viewModel::addNearbyCompanyBssids,
-                                enabled = companySsid != null,
+                                onClick = { showWifiSearch = true },
                                 modifier = Modifier.fillMaxWidth()
-                            ) { Text(s.registerVisibleAp(companySsid ?: s.office)) }
+                            ) { Text(s.searchWifiTitle) }
                         }
                     }
 
@@ -186,10 +232,21 @@ fun SettingsScreen(
                     ) {
                         BeaconEditor(
                             enabled = bleEnabled,
-                            beaconId = companyBeaconId,
+                            beaconIds = companyBeaconIds,
                             onEnabledChange = viewModel::setBleEnabled,
                             onRegister = viewModel::registerCompanyBeacon,
-                            onClear = viewModel::clearCompanyBeacon
+                            onRemove = viewModel::removeCompanyBeacons
+                        )
+                    }
+
+                    if (showWifiSearch) {
+                        WifiSearchDialog(
+                            registeredSsids = companyNetworks.mapTo(mutableSetOf()) { it.ssid },
+                            onSelect = { ssid ->
+                                viewModel.registerCompanySsid(ssid)
+                                showWifiSearch = false
+                            },
+                            onDismiss = { showWifiSearch = false }
                         )
                     }
                 }
@@ -807,9 +864,11 @@ private fun TimeRangeRow(startMinute: Int, endMinute: Int, onSave: (Int, Int) ->
 }
 
 /**
- * The BLE-beacon counterpart to the 회사 AP 등록 card: an on/off toggle for parallel detection plus
- * a "search nearby beacons and tap to register" flow that mirrors the Wi-Fi one. Registering a
- * beacon turns parallel detection on, since picking one is a clear statement of intent to use it.
+ * The BLE-beacon counterpart to the 회사 AP 등록 card: an on/off toggle for parallel detection, a
+ * flat one-line-per-token list of registered beacons with checkbox multi-select + batch delete
+ * (mirroring the Wi-Fi AP list), plus a "search nearby beacons and tap to register" flow that
+ * mirrors the Wi-Fi one. Registering a beacon turns parallel detection on, since picking one is a
+ * clear statement of intent to use it.
  *
  * BLE scanning needs BLUETOOTH_SCAN on Android 12+, which isn't part of the app's startup grant
  * (it's opt-in hardware), so both the toggle and the search request it on demand and only proceed
@@ -818,16 +877,17 @@ private fun TimeRangeRow(startMinute: Int, endMinute: Int, onSave: (Int, Int) ->
 @Composable
 private fun BeaconEditor(
     enabled: Boolean,
-    beaconId: String?,
+    beaconIds: List<String>,
     onEnabledChange: (Boolean) -> Unit,
     onRegister: (String) -> Unit,
-    onClear: () -> Unit
+    onRemove: (Set<String>) -> Unit
 ) {
     val context = LocalContext.current
     val s = LocalStrings.current
     var showSearch by remember { mutableStateOf(false) }
     var enableAfterGrant by remember { mutableStateOf(false) }
     var openSearchAfterGrant by remember { mutableStateOf(false) }
+    var selectedTokens by remember { mutableStateOf(setOf<String>()) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
@@ -862,35 +922,60 @@ private fun BeaconEditor(
                 }
             )
         }
-        Text(
-            beaconId?.let { s.registeredBeacon(it) } ?: s.noRegisteredBeacon,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (beaconId == null && enabled) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
+        if (beaconIds.isEmpty()) {
+            Text(
+                s.noRegisteredBeacon,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+        } else {
+            beaconIds.forEach { token ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedTokens = if (token in selectedTokens) selectedTokens - token else selectedTokens + token
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Checkbox(
+                        checked = token in selectedTokens,
+                        onCheckedChange = { checked ->
+                            selectedTokens = if (checked) selectedTokens + token else selectedTokens - token
+                        }
+                    )
+                    Text(token, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                }
             }
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = {
-                    if (!hasBleScanPermission(context)) {
-                        openSearchAfterGrant = true
-                        permissionLauncher.launch(requiredBleScanPermissions())
-                    } else {
-                        showSearch = true
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            ) { Text(s.searchNearbyBeacon) }
-            if (beaconId != null) {
-                TextButton(onClick = onClear) { Text(s.unregister) }
+            if (selectedTokens.isNotEmpty()) {
+                TextButton(
+                    onClick = {
+                        onRemove(selectedTokens)
+                        selectedTokens = emptySet()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(s.deleteSelectedAction(selectedTokens.size), color = MaterialTheme.colorScheme.error)
+                }
             }
         }
+        OutlinedButton(
+            onClick = {
+                if (!hasBleScanPermission(context)) {
+                    openSearchAfterGrant = true
+                    permissionLauncher.launch(requiredBleScanPermissions())
+                } else {
+                    showSearch = true
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(s.searchNearbyBeacon) }
     }
 
     if (showSearch) {
         BeaconSearchDialog(
+            registeredTokens = beaconIds.toSet(),
             onSelect = { token ->
                 onRegister(token)
                 // Picking a beacon is intent to use it, so switch parallel detection on if it isn't.
@@ -904,11 +989,12 @@ private fun BeaconEditor(
 
 /**
  * Scans briefly for nearby office-format beacons and lists their tokens (strongest first) for the
- * user to pick — the BLE mirror of [WifiSearchDialog]. Distinguishes "Bluetooth is off" from "found
- * nothing", since the fix for each is different.
+ * user to pick — the BLE mirror of [WifiSearchDialog], including the same already-registered
+ * marker per row. Distinguishes "Bluetooth is off" from "found nothing", since the fix for each is
+ * different.
  */
 @Composable
-private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+private fun BeaconSearchDialog(registeredTokens: Set<String>, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val s = LocalStrings.current
     var tokens by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -947,14 +1033,26 @@ private fun BeaconSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit
                 )
                 else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                     items(tokens) { token ->
-                        Text(
-                            token,
-                            style = MaterialTheme.typography.bodyLarge,
+                        val isRegistered = token in registeredTokens
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSelect(token) }
-                                .padding(vertical = 12.dp)
-                        )
+                                .let { if (isRegistered) it else it.clickable { onSelect(token) } }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(token, style = MaterialTheme.typography.bodyLarge)
+                            if (isRegistered) {
+                                Text(
+                                    s.alreadyRegistered,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                TextButton(onClick = { onSelect(token) }) { Text(s.registerAction) }
+                            }
+                        }
                     }
                 }
             }

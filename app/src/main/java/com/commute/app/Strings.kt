@@ -186,16 +186,19 @@ interface Strings {
     val tabApp: String
     fun companyApTitle(count: Int): String
     val apNotRegisteredWarning: String
-    fun registerVisibleAp(name: String): String
-    val office: String
+    /** Shown next to an already-registered SSID in the Wi-Fi search list, in place of a register
+     * action — picking it again would just be a harmless no-op merge, but showing this instead
+     * makes clear there's nothing to do. */
+    val alreadyRegistered: String
+    /** The per-row action in the Wi-Fi search list for an SSID that isn't registered yet. */
+    val registerAction: String
+    fun deleteSelectedAction(count: Int): String
     val beaconTitle: String
     val beaconDescription: String
     val on: String
     val off: String
-    fun registeredBeacon(id: String): String
     val noRegisteredBeacon: String
     val searchNearbyBeacon: String
-    val unregister: String
     val bluetoothOff: String
     val noBeaconFound: String
     val absenceThresholdTitle: String
@@ -265,8 +268,6 @@ interface Strings {
 
     // --- ViewModel toasts ---
     val apNotFoundNameOnly: String
-    fun apNotVisible(ssid: String): String
-    fun apRegistered(count: Int): String
     fun recoveredFromLog(n: Int): String
     val nothingToRecover: String
     val fileOpenFail: String
@@ -421,17 +422,16 @@ object KoStrings : Strings {
     override val tabData = "데이터"
     override val tabApp = "앱"
     override fun companyApTitle(count: Int) = "회사 AP 등록 (${count}대)"
-    override val apNotRegisteredWarning = "AP가 등록되지 않아 와이파이 이름만으로 감지합니다. 같은 이름의 다른 와이파이도 회사로 인식될 수 있으니, 회사에서 아래 버튼을 눌러 등록하세요."
-    override fun registerVisibleAp(name: String) = "지금 보이는 $name AP 등록"
-    override val office = "회사"
+    override val apNotRegisteredWarning = "AP가 등록되지 않아 와이파이 이름만으로 감지합니다. 같은 이름의 다른 와이파이도 회사로 인식될 수 있으니, 아래 버튼으로 검색해 등록하세요."
+    override val alreadyRegistered = "등록됨"
+    override val registerAction = "등록"
+    override fun deleteSelectedAction(count: Int) = "선택 삭제 (${count})"
     override val beaconTitle = "회사 비콘(BLE) 병행 감지"
     override val beaconDescription = "와이파이가 안 잡혀도(예: 와이파이 끄고 LTE 사용) 자리 근처 비콘으로 회사를 감지합니다."
     override val on = "사용함"
     override val off = "사용 안 함"
-    override fun registeredBeacon(id: String) = "등록된 비콘: $id"
     override val noRegisteredBeacon = "등록된 비콘 없음"
     override val searchNearbyBeacon = "주변 비콘 검색"
-    override val unregister = "등록 해제"
     override val bluetoothOff = "블루투스가 꺼져 있습니다. 블루투스를 켜고 다시 시도하세요."
     override val noBeaconFound = "주변에서 회사 비콘을 찾지 못했습니다. 비콘(노트북·ESP32)이 켜져 있는지 확인하세요."
     override val absenceThresholdTitle = "자리비움 인정 기준(분)"
@@ -498,8 +498,6 @@ object KoStrings : Strings {
         "복귀 $backTime — $leaveTime 퇴근 기록을 자리비움으로 바꿨습니다"
 
     override val apNotFoundNameOnly = "AP를 찾지 못해 이름만으로 감지합니다. 회사에서 설정 > 회사 AP 등록을 눌러주세요"
-    override fun apNotVisible(ssid: String) = "주변에 $ssid AP가 보이지 않습니다"
-    override fun apRegistered(count: Int) = "회사 AP ${count}대 등록됨"
     override fun recoveredFromLog(n: Int) = "로그에서 ${n}건 복구됨"
     override val nothingToRecover = "복구할 기록이 없습니다"
     override val fileOpenFail = "파일을 열 수 없습니다"
@@ -665,17 +663,16 @@ object EnStrings : Strings {
     override val tabData = "Data"
     override val tabApp = "App"
     override fun companyApTitle(count: Int) = "Office APs ($count)"
-    override val apNotRegisteredWarning = "No AP registered, so detection uses the Wi-Fi name only. A different network with the same name could be mistaken for the office — tap the button below while at the office to register."
-    override fun registerVisibleAp(name: String) = "Register visible $name APs"
-    override val office = "office"
+    override val apNotRegisteredWarning = "No AP registered, so detection uses the Wi-Fi name only. A different network with the same name could be mistaken for the office — search for it below to register."
+    override val alreadyRegistered = "Registered"
+    override val registerAction = "Register"
+    override fun deleteSelectedAction(count: Int) = "Delete selected ($count)"
     override val beaconTitle = "Office beacon (BLE)"
     override val beaconDescription = "Detects the office by a nearby beacon even when Wi-Fi isn't available (e.g. Wi-Fi off, on LTE)."
     override val on = "On"
     override val off = "Off"
-    override fun registeredBeacon(id: String) = "Registered beacon: $id"
     override val noRegisteredBeacon = "No beacon registered"
     override val searchNearbyBeacon = "Search nearby beacons"
-    override val unregister = "Unregister"
     override val bluetoothOff = "Bluetooth is off. Turn it on and try again."
     override val noBeaconFound = "No office beacon found nearby. Check that the beacon (laptop/ESP32) is on."
     override val absenceThresholdTitle = "Away threshold (min)"
@@ -742,8 +739,6 @@ object EnStrings : Strings {
         "Back at $backTime — the $leaveTime clock-out is now an away"
 
     override val apNotFoundNameOnly = "Couldn't find the AP, detecting by name only. At the office, tap Settings > Office APs."
-    override fun apNotVisible(ssid: String) = "No $ssid AP visible nearby"
-    override fun apRegistered(count: Int) = "$count office AP${if (count == 1) "" else "s"} registered"
     override fun recoveredFromLog(n: Int) = "Recovered $n from log"
     override val nothingToRecover = "Nothing to recover"
     override val fileOpenFail = "Couldn't open the file"

@@ -13,8 +13,9 @@ import androidx.core.content.ContextCompat
 import com.commute.app.AppLanguage
 import com.commute.app.stringsFor
 import com.commute.app.ble.CompanyBeaconDetection
-import com.commute.app.ble.detectCompanyBeacon
+import com.commute.app.ble.detectCompanyBeacons
 import com.commute.app.ble.mergePresence
+import com.commute.app.ble.representativeCompanyBeacon
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
@@ -271,30 +272,26 @@ class WifiMonitorService : Service() {
     private suspend fun checkWifiState() {
         stateMutex.withLock {
             val s = stringsFor(settingsRepository.language.first())
-            val companySsid = settingsRepository.companySsid.first()
+            val companyNetworks = settingsRepository.companyNetworks.first()
             val bleEnabled = settingsRepository.bleEnabled.first()
-            val beaconId = settingsRepository.companyBeaconId.first()
-            val wifiRegistered = !companySsid.isNullOrBlank()
-            val bleRegistered = bleEnabled && !beaconId.isNullOrBlank()
+            val beaconIds = settingsRepository.companyBeaconIds.first()
+            val wifiRegistered = companyNetworks.isNotEmpty()
+            val bleRegistered = bleEnabled && beaconIds.isNotEmpty()
             // Nothing to detect against — neither the Wi-Fi nor the beacon is registered.
             if (!wifiRegistered && !bleRegistered) return@withLock
 
-            // The label stored on each event (and shown in notifications). Prefer the Wi-Fi name
-            // for continuity with existing records; fall back to the beacon token for a BLE-only setup.
-            val presenceLabel = companySsid?.takeUnless { it.isBlank() } ?: beaconId ?: "회사"
-
-            val companyBssids = settingsRepository.companyBssids.first()
             // Keeps the OS's scan cache fresh even while we're *not* actually connected to the
-            // office AP (Wi-Fi off, on LTE, or associated with something else) — detectCompanyWifi
+            // office AP (Wi-Fi off, on LTE, or associated with something else) — detectCompanyNetworks
             // below only reads that cache, and relying solely on whatever other apps or the
             // system's own passive scanning happen to trigger left detection laggy exactly when
             // it mattered most: someone in range but not connected. Fire-and-forget, and its
             // results land in time for a *later* poll, not this one — one request per 60s poll is
             // far under Android's throttling budget (throttling exempts a running foreground
-            // service anyway), unlike the old assumption that it "would add little freshness".
+            // service anyway), unlike the old assumption that it "would add little freshness". A
+            // single scan covers every registered network at once — scanning isn't per-SSID.
             if (wifiRegistered) requestWifiScan(applicationContext)
             val wifiDetection = if (wifiRegistered) {
-                detectCompanyWifi(applicationContext, companySsid!!, companyBssids)
+                detectCompanyNetworks(applicationContext, companyNetworks)
             } else {
                 CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
             }
@@ -305,10 +302,18 @@ class WifiMonitorService : Service() {
             // so it has to listen for a few seconds every poll) is pure battery cost once redundant.
             // When it does run it's safe under the alarm poll's 30s wakelock.
             val bleDetection = if (bleRegistered && !wifiDetection.nearby) {
-                detectCompanyBeacon(applicationContext, beaconId!!)
+                detectCompanyBeacons(applicationContext, beaconIds)
             } else {
                 CompanyBeaconDetection(nearby = false, observedAt = null, lastObservedAt = null)
             }
+            // The label stored on each event (and shown in notifications): whichever network Wi-Fi
+            // actually matched this poll, or the first registered network if Wi-Fi didn't see
+            // anything (BLE-only presence, or an away poll with no match at all) — a single
+            // representative name even though several networks may be registered. Falls back to
+            // the matched (or first-registered) beacon token for a BLE-only setup with no Wi-Fi
+            // registered.
+            val presenceLabel = representativeCompanySsid(companyNetworks, wifiDetection.matchedSsid)
+                ?: representativeCompanyBeacon(beaconIds, bleDetection.matchedToken) ?: "회사"
             val detection = mergePresence(wifiDetection, bleDetection)
             val companyWifiNearby = detection.nearby
             var wasAtWork = settingsRepository.isAtWork.first()

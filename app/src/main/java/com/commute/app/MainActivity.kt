@@ -82,15 +82,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.commute.app.ble.detectCompanyBeacon
+import com.commute.app.ble.detectCompanyBeacons
 import com.commute.app.ble.hasBleScanPermission
 import com.commute.app.data.isWithinMinuteOfDayWindow
 import com.commute.app.ui.theme.CommuteTheme
 import com.commute.app.wifi.WifiMonitorService
 import com.commute.app.wifi.clearEventNotifications
 import com.commute.app.wifi.currentWifiSsid
-import com.commute.app.wifi.isCompanyWifiNearby
+import com.commute.app.wifi.detectCompanyNetworks
 import com.commute.app.wifi.nearbyWifiSsids
+import com.commute.app.wifi.representativeCompanySsid
 import com.commute.app.wifi.requestWifiScan
 import kotlinx.coroutines.delay
 
@@ -156,10 +157,9 @@ fun CommuteApp(viewModel: CommuteViewModel = viewModel()) {
 fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val s = LocalStrings.current
-    val companySsid by viewModel.companySsid.collectAsState()
-    val companyBssids by viewModel.companyBssids.collectAsState()
+    val companyNetworks by viewModel.companyNetworks.collectAsState()
     val bleEnabled by viewModel.bleEnabled.collectAsState()
-    val companyBeaconId by viewModel.companyBeaconId.collectAsState()
+    val companyBeaconIds by viewModel.companyBeaconIds.collectAsState()
     val monitoringEnabled by viewModel.monitoringEnabled.collectAsState()
     val isAtWork by viewModel.isAtWork.collectAsState()
     val awaySinceAt by viewModel.awaySinceAt.collectAsState()
@@ -232,6 +232,9 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
 
     var currentSsid by remember { mutableStateOf<String?>(null) }
     var companyWifiDetectedNow by remember { mutableStateOf(false) }
+    // Which registered network actually matched this poll, if any — display only (see
+    // representativeCompanySsid), never used to decide presence.
+    var detectedCompanySsid by remember { mutableStateOf<String?>(null) }
     var companyBeaconDetectedNow by remember { mutableStateOf(false) }
     var locationServicesEnabled by remember { mutableStateOf(true) }
     var isLunchTimeNow by remember { mutableStateOf(false) }
@@ -247,25 +250,25 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     // background — which Android 12+ rejects outright and 14+ rejects for a while-in-use service
     // type, crashing the app precisely when the watchdog was supposed to save it. Suspending
     // while invisible also drops the pointless background binder traffic.
-    LaunchedEffect(hasLocationPermission, companySsid, companyBssids, bleEnabled, companyBeaconId, lunchStartMinute, lunchEndMinute) {
+    LaunchedEffect(hasLocationPermission, companyNetworks, bleEnabled, companyBeaconIds, lunchStartMinute, lunchEndMinute) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 nowTick = System.currentTimeMillis()
                 currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
-                val registeredSsid = companySsid
-                companyWifiDetectedNow = hasLocationPermission && registeredSsid != null &&
-                    isCompanyWifiNearby(context, registeredSsid, companyBssids)
-                // BLE presence mirrors the Wi-Fi live poll, gated on the beacon being registered
-                // and enabled. detectCompanyBeacon() is a bounded (~6s) active scan that already
-                // returns "not nearby" when the permission is missing or Bluetooth is off, so no
-                // extra guard is needed beyond skipping it entirely when BLE isn't in use. This is
-                // the same OR-with-Wi-Fi presence the background service records via mergePresence,
-                // so the card agrees with the service even when only the beacon can see the office.
-                val beaconToken = companyBeaconId
-                companyBeaconDetectedNow = if (bleEnabled && !beaconToken.isNullOrBlank() &&
+                val wifiDetection = if (hasLocationPermission) detectCompanyNetworks(context, companyNetworks) else null
+                companyWifiDetectedNow = wifiDetection?.nearby == true
+                detectedCompanySsid = wifiDetection?.matchedSsid
+                // BLE presence mirrors the Wi-Fi live poll, gated on at least one beacon being
+                // registered and BLE being enabled. detectCompanyBeacons() is a bounded (~6s)
+                // active scan that already returns "not nearby" when the permission is missing or
+                // Bluetooth is off, so no extra guard is needed beyond skipping it entirely when
+                // BLE isn't in use. This is the same OR-with-Wi-Fi presence the background service
+                // records via mergePresence, so the card agrees with the service even when only a
+                // beacon can see the office.
+                companyBeaconDetectedNow = if (bleEnabled && companyBeaconIds.isNotEmpty() &&
                     hasBleScanPermission(context)) {
-                    detectCompanyBeacon(context, beaconToken).nearby
+                    detectCompanyBeacons(context, companyBeaconIds).nearby
                 } else {
                     false
                 }
@@ -329,6 +332,12 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // One name to show for potentially several registered networks — prefers whichever
+            // is actually detected right now, falling back to the first registered when nothing
+            // currently matches (Wi-Fi off, out of range, ...). Shared by the status card above
+            // and the tabs below, so it's hoisted to this outer scope.
+            val representativeSsid = representativeCompanySsid(companyNetworks, detectedCompanySsid)
+
             // Top section: sized to its content (well under a third of the screen), so the
             // tabs below get all the leftover space instead of a big empty gap.
             Column(
@@ -367,9 +376,10 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     nowMillis = nowTick,
                     isLunchTimeNow = isLunchTimeNow,
                     currentSsid = currentSsid,
-                    companySsid = companySsid,
+                    companySsid = representativeSsid,
+                    isCurrentSsidRegistered = companyNetworks.any { it.ssid == currentSsid },
                     monitoringEnabled = monitoringEnabled,
-                    switchEnabled = companySsid != null,
+                    switchEnabled = companyNetworks.isNotEmpty(),
                     onRegister = { currentSsid?.let(viewModel::registerCompanySsid) },
                     onOpenWifiSearch = { showWifiSearch = true },
                     onMonitoringChange = { enabled ->
@@ -384,6 +394,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
 
                 if (showWifiSearch) {
                     WifiSearchDialog(
+                        registeredSsids = companyNetworks.mapTo(mutableSetOf()) { it.ssid },
                         onSelect = { ssid ->
                             viewModel.registerCompanySsid(ssid)
                             showWifiSearch = false
@@ -410,7 +421,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         dailyStats = dailyWorkStats,
                         events = allEvents,
                         leaves = leaves,
-                        companySsid = companySsid,
+                        companySsid = representativeSsid,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
                         halfAmStartMinute = halfAmStartMinute,
@@ -427,7 +438,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         events = allEvents,
                         excludedEvents = excludedEvents,
                         missingRecords = missingRecords,
-                        companySsid = companySsid,
+                        companySsid = representativeSsid,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
                         onAddEvent = viewModel::addEvent,
@@ -509,6 +520,7 @@ private fun CompactStatusCard(
     isLunchTimeNow: Boolean,
     currentSsid: String?,
     companySsid: String?,
+    isCurrentSsidRegistered: Boolean,
     monitoringEnabled: Boolean,
     switchEnabled: Boolean,
     onRegister: () -> Unit,
@@ -593,7 +605,7 @@ private fun CompactStatusCard(
                 }
                 Switch(checked = monitoringEnabled, enabled = switchEnabled, onCheckedChange = onMonitoringChange)
             }
-            if (companySsid == null || currentSsid != companySsid) {
+            if (!isCurrentSsidRegistered) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -643,10 +655,15 @@ private fun NoticeCard(
 /**
  * Lets the user register a company Wi-Fi without needing to actually connect to it first —
  * requests a fresh scan (best-effort; may be throttled) and lists whatever nearby SSIDs the
- * device can see, ordered by signal strength, so the user just taps the right one.
+ * device can see, ordered by signal strength. [registeredSsids] marks entries already registered
+ * (a plain "already registered" label, tap disabled — re-adding would just be a harmless no-op
+ * merge, but showing that instead of a register action makes "nothing to do here" obvious) so the
+ * list reads as "here's what you can still add" rather than a flat, undifferentiated name list.
+ * Not private: also used from [com.commute.app.SettingsScreen] to add an *additional* office
+ * network, since that flow needs the exact same "search and pick" shape as this one.
  */
 @Composable
-private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+fun WifiSearchDialog(registeredSsids: Set<String>, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val s = LocalStrings.current
     var ssids by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -677,14 +694,26 @@ private fun WifiSearchDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) 
                 )
                 else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                     items(ssids) { ssid ->
-                        Text(
-                            ssid,
-                            style = MaterialTheme.typography.bodyLarge,
+                        val isRegistered = ssid in registeredSsids
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSelect(ssid) }
-                                .padding(vertical = 12.dp)
-                        )
+                                .let { if (isRegistered) it else it.clickable { onSelect(ssid) } }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(ssid, style = MaterialTheme.typography.bodyLarge)
+                            if (isRegistered) {
+                                Text(
+                                    s.alreadyRegistered,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                TextButton(onClick = { onSelect(ssid) }) { Text(s.registerAction) }
+                            }
+                        }
                     }
                 }
             }

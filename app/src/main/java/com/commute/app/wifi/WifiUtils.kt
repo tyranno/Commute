@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.SystemClock
+import com.commute.app.data.CompanyNetwork
 
 /** Strips surrounding quotes Android puts around SSIDs and filters out the "unknown" placeholder. */
 private fun WifiInfo?.cleanSsid(): String? {
@@ -26,36 +27,18 @@ fun currentWifiSsid(context: Context): String? {
 }
 
 /**
- * Whether the company's Wi-Fi shows up among nearby access points in the device's last Wi-Fi
- * scan, regardless of whether the phone is actually connected to it. Used for commute detection:
- * the user wants "walked into range" to count as 출근, not "actively connected to that AP" — in
- * range but never associated (Wi-Fi off, on LTE, or connected elsewhere) must still count. This
- * function itself only reads the OS's cached scan results rather than triggering a scan of its
- * own; [com.commute.app.wifi.WifiMonitorService] is the one keeping that cache fresh (see
- * [requestWifiScan]) by requesting one every poll — cheap enough at a 1-minute interval to be
- * worth doing rather than depending entirely on whatever scanning happens to occur elsewhere.
- * Requires ACCESS_FINE_LOCATION.
- *
- * Identity is the AP's **BSSID** (its hardware MAC), not just the SSID name, whenever
- * [companyBssids] is non-empty. SSID alone is merely a label and common defaults like "iptime5G"
- * appear all over the place — matching on name alone logged a full 출근/퇴근 pair on a day the
- * user never came to the office, because some unrelated AP elsewhere happened to share the name.
- * A BSSID is unique per access point, so this pins detection to the actual office hardware.
- * [companyBssids] holds a set rather than one value because an office usually has several APs
- * broadcasting the same SSID, and roaming between them must not read as leaving.
- *
- * Falls back to SSID-only matching when [companyBssids] is empty — that's the pre-BSSID state
- * for an already-registered network, and silently detecting nothing at all would be far worse
- * than the old imprecise behaviour until the user re-registers.
- *
- * Also counts an actual live connection as "nearby" even if the scan cache doesn't (yet) list
- * it — the scan cache can miss a poll cycle while genuinely connected (stale cache, a missed
- * background scan tick, brief AP interference), which showed up in practice as a spurious
- * ~1-minute 자리비움 while the phone never left the office. A real connection is always at least
- * as strong a presence signal as a scan hit, so this only ever adds true positives.
+ * Whether *any* registered office Wi-Fi network shows up among nearby access points in the
+ * device's last Wi-Fi scan, regardless of whether the phone is actually connected to it. Used for
+ * commute detection: the user wants "walked into range" to count as 출근, not "actively connected
+ * to that AP" — in range but never associated (Wi-Fi off, on LTE, or connected elsewhere) must
+ * still count. This function itself only reads the OS's cached scan results rather than
+ * triggering a scan of its own; [com.commute.app.wifi.WifiMonitorService] is the one keeping that
+ * cache fresh (see [requestWifiScan]) by requesting one every poll — cheap enough at a 1-minute
+ * interval to be worth doing rather than depending entirely on whatever scanning happens to occur
+ * elsewhere. Requires ACCESS_FINE_LOCATION.
  */
-fun isCompanyWifiNearby(context: Context, companySsid: String, companyBssids: Set<String>): Boolean =
-    detectCompanyWifi(context, companySsid, companyBssids).nearby
+fun isAnyCompanyNetworkNearby(context: Context, networks: List<CompanyNetwork>): Boolean =
+    detectCompanyNetworks(context, networks).nearby
 
 /**
  * Outcome of one presence check.
@@ -72,43 +55,82 @@ fun isCompanyWifiNearby(context: Context, companySsid: String, companyBssids: Se
  * The latter is the mirror image for 퇴근: after someone leaves, the AP lingers in the scan cache
  * until the next scan drops it, so the poll that finally reads a miss is minutes late — but that
  * last matching scan's stamp is when they were really still there. Same null meaning as [observedAt].
+ *
+ * [matchedSsid] is which registered network actually produced the match — display-only (the
+ * "회사 와이파이: X" label), never used to decide presence itself. Null when nothing matched.
+ * When more than one registered network matches at once (rare — e.g. overlapping coverage from
+ * two office networks), whichever was registered first wins the label; presence itself is
+ * unaffected either way.
  */
-data class CompanyWifiDetection(val nearby: Boolean, val observedAt: Long?, val lastObservedAt: Long?)
+data class CompanyWifiDetection(
+    val nearby: Boolean,
+    val observedAt: Long?,
+    val lastObservedAt: Long?,
+    val matchedSsid: String? = null
+)
 
 /**
- * [isCompanyWifiNearby]'s answer plus *when* the evidence for it was captured — see
+ * [isAnyCompanyNetworkNearby]'s answer plus *when* the evidence for it was captured — see
  * [CompanyWifiDetection.observedAt]. A live connection is reported with a null stamp rather than a
  * backdated one: being associated says nothing about when association began.
  *
- * Each cached result carries the time of the last scan that saw that BSSID, so with several office
- * APs [observedAt] (the earliest) is the first moment any of them came into view — the moment the
- * person arrived — while [lastObservedAt] (the latest) is the most recent moment any was still in
- * view, which is what a 퇴근 is backdated to. Both stamps are reported; the caller picks the edge
- * it needs.
+ * Multiple [networks] are checked with OR — an office spanning more than one physical network
+ * (different floors, a router that got replaced mid-use and now broadcasts a different name, ...)
+ * is still "the office" if *any* registered network is in range, the same way Wi-Fi and BLE
+ * presence are already OR'd together. Each network's identity is still its **BSSID** set
+ * (falling back to SSID-only when a network's BSSID set is empty — the pre-BSSID state for an
+ * already-registered network), for the same reason a single network always was: an SSID alone is
+ * merely a label, and common defaults like "iptime5G" appear all over the place.
+ *
+ * Each cached result carries the time of the last scan that saw that BSSID, so across every
+ * registered network's APs [observedAt] (the earliest) is the first moment any of them came into
+ * view — the moment the person arrived — while [lastObservedAt] (the latest) is the most recent
+ * moment any was still in view, which is what a 퇴근 is backdated to. Both stamps are reported;
+ * the caller picks the edge it needs.
+ *
+ * Also counts an actual live connection to any registered network as "nearby" even if the scan
+ * cache doesn't (yet) list it — the scan cache can miss a poll cycle while genuinely connected
+ * (stale cache, a missed background scan tick, brief AP interference), which showed up in
+ * practice as a spurious ~1-minute 자리비움 while the phone never left the office. A real
+ * connection is always at least as strong a presence signal as a scan hit, so this only ever
+ * adds true positives.
  */
 @Suppress("DEPRECATION")
-fun detectCompanyWifi(
-    context: Context,
-    companySsid: String,
-    companyBssids: Set<String>
-): CompanyWifiDetection {
+fun detectCompanyNetworks(context: Context, networks: List<CompanyNetwork>): CompanyWifiDetection {
+    val notNearby = CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
+    if (networks.isEmpty()) return notNearby
     val wifiManager = context.applicationContext
-        .getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        ?: return CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
+        .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return notNearby
 
     val connection = wifiManager.connectionInfo
-    val connectionMatches = connection.cleanSsid() == companySsid &&
-        (companyBssids.isEmpty() || connection?.bssid?.normalizeBssid() in companyBssids)
-    if (connectionMatches) return CompanyWifiDetection(nearby = true, observedAt = null, lastObservedAt = null)
-
-    val matches = wifiManager.scanResults.filter { result ->
-        result.SSID?.trim('"') == companySsid &&
-            (companyBssids.isEmpty() || result.BSSID?.normalizeBssid() in companyBssids)
+    val connectedSsid = connection.cleanSsid()
+    val connectedBssid = connection?.bssid?.normalizeBssid()
+    val connectionMatch = networks.firstOrNull { network ->
+        connectedSsid == network.ssid && (network.bssids.isEmpty() || connectedBssid in network.bssids)
     }
-    if (matches.isEmpty()) return CompanyWifiDetection(nearby = false, observedAt = null, lastObservedAt = null)
+    if (connectionMatch != null) {
+        return CompanyWifiDetection(nearby = true, observedAt = null, lastObservedAt = null, matchedSsid = connectionMatch.ssid)
+    }
 
-    val stamps = matches.mapNotNull { it.wallClockSeenAt() }
-    return CompanyWifiDetection(nearby = true, observedAt = stamps.minOrNull(), lastObservedAt = stamps.maxOrNull())
+    val scanResults = wifiManager.scanResults
+    var matchedNetwork: CompanyNetwork? = null
+    val stamps = mutableListOf<Long>()
+    for (network in networks) {
+        val matches = scanResults.filter { result ->
+            result.SSID?.trim('"') == network.ssid &&
+                (network.bssids.isEmpty() || result.BSSID?.normalizeBssid() in network.bssids)
+        }
+        if (matches.isEmpty()) continue
+        if (matchedNetwork == null) matchedNetwork = network
+        stamps += matches.mapNotNull { it.wallClockSeenAt() }
+    }
+    if (matchedNetwork == null) return notNearby
+    return CompanyWifiDetection(
+        nearby = true,
+        observedAt = stamps.minOrNull(),
+        lastObservedAt = stamps.maxOrNull(),
+        matchedSsid = matchedNetwork.ssid
+    )
 }
 
 /**
@@ -164,10 +186,20 @@ private fun String.isUsableBssid(): Boolean =
     isNotBlank() && this != "00:00:00:00:00:00" && this != "02:00:00:00:00:00"
 
 /**
+ * A single label to show for potentially several registered networks — status card and
+ * notifications only want one name at a glance, not a list. Prefers [matchedSsid] (whichever
+ * network is actually detected right now), falling back to the first-registered network so
+ * there's still something to show when nothing is currently in range. Null only when no network
+ * is registered at all.
+ */
+fun representativeCompanySsid(networks: List<CompanyNetwork>, matchedSsid: String?): String? =
+    matchedSsid ?: networks.firstOrNull()?.ssid
+
+/**
  * Best-effort request for a fresh Wi-Fi scan — used both for the explicit, user-initiated "search
  * for nearby networks to register" flow, and once per poll from [com.commute.app.wifi.WifiMonitorService]
- * to keep the scan cache [detectCompanyWifi] reads from going stale while not actually connected to
- * the office AP. Neither call site is anywhere near Android 9+'s scan-throttling limits (a single
+ * to keep the scan cache [detectCompanyNetworks] reads from going stale while not actually connected
+ * to the office AP. Neither call site is anywhere near Android 9+'s scan-throttling limits (a single
  * manual tap, or one request per 60s from a running foreground service). The call may still be
  * silently ignored by the OS; callers should treat a fresher read shortly after as a bonus, not a
  * guarantee.
