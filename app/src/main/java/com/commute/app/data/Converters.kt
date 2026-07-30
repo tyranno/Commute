@@ -14,4 +14,10 @@ class Converters {
 
     @TypeConverter
     fun toLeaveType(value: String): LeaveType = LeaveType.valueOf(value)
+
+    @TypeConverter
+    fun fromHolidaySource(source: HolidaySource): String = source.name
+
+    @TypeConverter
+    fun toHolidaySource(value: String): HolidaySource = HolidaySource.valueOf(value)
 }

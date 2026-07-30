@@ -10,6 +10,8 @@ import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CompanyNetwork
 import com.commute.app.data.DailyWorkStat
+import com.commute.app.data.Holiday
+import com.commute.app.data.HolidaySource
 import com.commute.app.data.LeaveEntry
 import com.commute.app.data.SettingsRepository
 import com.commute.app.data.MissingRecordFlag
@@ -22,6 +24,9 @@ import com.commute.app.data.overtimeMinutesForWeek
 import com.commute.app.data.parseBackupJson
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
+import com.commute.app.data.startOfYear
+import com.commute.app.holiday.HolidaySyncStatus
+import com.commute.app.holiday.fetchKoreanHolidays
 import com.commute.app.update.ReleaseInfo
 import com.commute.app.update.UpdateStatus
 import com.commute.app.update.currentAppVersionName
@@ -30,6 +35,7 @@ import com.commute.app.update.fetchLatestRelease
 import com.commute.app.update.isNewerVersion
 import com.commute.app.wifi.WifiMonitorService
 import com.commute.app.wifi.nearbyBssidsFor
+import java.util.Calendar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -52,6 +58,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     private val database = CommuteDatabase.getInstance(application)
     private val dao = database.commuteDao()
     private val leaveDao = database.leaveDao()
+    private val holidayDao = database.holidayDao()
 
     /** Append-only, DB-independent mirror of every event — the safety net that lets a wiped or
      * partially-lost history be rebuilt (see [RecoveryJournal] and [recoverFromJournal]). */
@@ -63,6 +70,19 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         // recorded from here on. Additive — never removes anything.
         viewModelScope.launch(Dispatchers.IO) {
             recoveryJournal.reconcile(dao.getAllOnce())
+        }
+        // Auto-sync once per year: if nothing synced/declared for the current calendar year yet
+        // (first run ever, or a fresh new year with no resync since), fetch it without waiting for
+        // the user to remember to press the 휴일 탭's sync button. A manual resync there still
+        // covers everything else (correcting a bad fetch, refreshing next year's data early).
+        viewModelScope.launch {
+            val year = Calendar.getInstance().get(Calendar.YEAR)
+            val hasCurrentYear = withContext(Dispatchers.IO) {
+                val yearStart = startOfYear(year)
+                val yearEnd = startOfYear(year + 1)
+                holidayDao.getAllOnce().any { it.date in yearStart until yearEnd }
+            }
+            if (!hasCurrentYear) syncHolidays()
         }
     }
 
@@ -169,6 +189,12 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     /** Declared 연차/반차/외출 records, newest first — the manual counterpart to [events]. */
     val leaves: StateFlow<List<LeaveEntry>> = leaveDao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Public holidays (synced) and user-declared holidays, date-ascending — feeds the 휴일 탭 and
+     * the home chart's per-day highlight. Separate from [leaves]: a holiday doesn't consume leave
+     * or carry a time range, it just marks the day. */
+    val holidays: StateFlow<List<Holiday>> = holidayDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Worked-minutes per day across all recorded history (not just this week), so the 현황
@@ -384,6 +410,51 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { leaveDao.delete(entry) }
     }
 
+    /** Adds or renames a user-declared holiday. [date] is the row's primary key, so saving under
+     * an unchanged date is a plain overwrite; [oldDate] non-null and different means the user moved
+     * the entry to a new day, which needs the old row removed first (a REPLACE insert wouldn't
+     * touch it, since its key hasn't changed). */
+    fun saveHoliday(holiday: Holiday, oldDate: Long? = null) {
+        viewModelScope.launch {
+            if (oldDate != null && oldDate != holiday.date) {
+                holidayDao.delete(Holiday(oldDate, "", holiday.source))
+            }
+            holidayDao.insert(holiday)
+        }
+    }
+
+    fun deleteHoliday(holiday: Holiday) {
+        viewModelScope.launch { holidayDao.delete(holiday) }
+    }
+
+    private val _holidaySyncStatus = MutableStateFlow<HolidaySyncStatus>(HolidaySyncStatus.Idle)
+    val holidaySyncStatus: StateFlow<HolidaySyncStatus> = _holidaySyncStatus.asStateFlow()
+
+    /** Refetches this year's and next year's Korean public holidays and replaces every existing
+     * [HolidaySource.AUTO] row in that span — [HolidaySource.CUSTOM] rows are left alone
+     * unconditionally, and any fetched date that a custom entry already occupies is skipped so a
+     * resync can never quietly overwrite something the user declared by hand. */
+    fun syncHolidays() {
+        viewModelScope.launch {
+            _holidaySyncStatus.value = HolidaySyncStatus.Syncing
+            _holidaySyncStatus.value = try {
+                val year = Calendar.getInstance().get(Calendar.YEAR)
+                val fetched = withContext(Dispatchers.IO) { fetchKoreanHolidays(year, year + 1) }
+                withContext(Dispatchers.IO) {
+                    val customDates = holidayDao.getAllOnce()
+                        .filter { it.source == HolidaySource.CUSTOM }
+                        .mapTo(mutableSetOf()) { it.date }
+                    val toInsert = fetched.filterNot { it.date in customDates }
+                    holidayDao.deleteAutoInRange(startOfYear(year), startOfYear(year + 2))
+                    holidayDao.insertAll(toInsert)
+                }
+                HolidaySyncStatus.Success(fetched.size)
+            } catch (e: Exception) {
+                HolidaySyncStatus.Failed(e.message)
+            }
+        }
+    }
+
     /** Fills in a record the service missed (e.g. wifi/permission hiccup, phone off). */
     fun addEvent(event: CommuteEvent) {
         viewModelScope.launch {
@@ -453,6 +524,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val allEvents = dao.getAllOnce()
                 val allLeaves = leaveDao.getAllOnce()
+                val allHolidays = holidayDao.getAllOnce()
                 // Read straight from the repository rather than the StateFlows' .value — those
                 // only hold a value while something is subscribed, so a backup's correctness
                 // shouldn't depend on which screen happens to be composed right now.
@@ -476,7 +548,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 // Off the main thread: the SAF Uri can point at a cloud provider, so the write is
                 // potentially a network round-trip.
                 withContext(Dispatchers.IO) {
-                    val json = buildBackupJson(allEvents, allLeaves, settings, System.currentTimeMillis())
+                    val json = buildBackupJson(allEvents, allLeaves, allHolidays, settings, System.currentTimeMillis())
                     app.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
                         ?: throw IllegalStateException(s.fileOpenFail)
                 }
@@ -509,6 +581,9 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
                 // snapshot, same as for events.
                 leaveDao.deleteAll()
                 leaveDao.insertAll(parsed.leaves)
+                // Holidays follow the same wholesale-replace rule as leaves.
+                holidayDao.deleteAll()
+                holidayDao.insertAll(parsed.holidays)
                 // Fold the restored events into the journal (additive) so they're protected going
                 // forward too, without dropping journal entries the backup happened to omit.
                 withContext(Dispatchers.IO) { recoveryJournal.reconcile(dao.getAllOnce()) }

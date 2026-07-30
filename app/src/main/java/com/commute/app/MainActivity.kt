@@ -84,6 +84,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.commute.app.ble.detectCompanyBeacons
 import com.commute.app.ble.hasBleScanPermission
+import com.commute.app.ble.requiredBleScanPermissions
 import com.commute.app.data.isWithinMinuteOfDayWindow
 import com.commute.app.ui.theme.CommuteTheme
 import com.commute.app.wifi.WifiMonitorService
@@ -172,6 +173,8 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     val weeklyOvertimeMinutes by viewModel.weeklyOvertimeMinutes.collectAsState()
     val dailyWorkStats by viewModel.dailyWorkStats.collectAsState()
     val leaves by viewModel.leaves.collectAsState()
+    val holidays by viewModel.holidays.collectAsState()
+    val holidaySyncStatus by viewModel.holidaySyncStatus.collectAsState()
     val lunchStartMinute by viewModel.lunchStartMinute.collectAsState()
     val lunchEndMinute by viewModel.lunchEndMinute.collectAsState()
     val halfAmStartMinute by viewModel.halfAmStartMinute.collectAsState()
@@ -366,6 +369,14 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                 }
 
                 var showWifiSearch by remember { mutableStateOf(false) }
+                var showBeaconSearch by remember { mutableStateOf(false) }
+                var openBeaconSearchAfterGrant by remember { mutableStateOf(false) }
+                val beaconPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions()
+                ) {
+                    if (hasBleScanPermission(context) && openBeaconSearchAfterGrant) showBeaconSearch = true
+                    openBeaconSearchAfterGrant = false
+                }
                 CompactStatusCard(
                     isAtWork = isAtWork,
                     companyWifiDetectedNow = companyWifiDetectedNow,
@@ -382,6 +393,14 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     switchEnabled = companyNetworks.isNotEmpty(),
                     onRegister = { currentSsid?.let(viewModel::registerCompanySsid) },
                     onOpenWifiSearch = { showWifiSearch = true },
+                    onOpenBeaconSearch = {
+                        if (!hasBleScanPermission(context)) {
+                            openBeaconSearchAfterGrant = true
+                            beaconPermissionLauncher.launch(requiredBleScanPermissions())
+                        } else {
+                            showBeaconSearch = true
+                        }
+                    },
                     onMonitoringChange = { enabled ->
                         if (enabled && !hasLocationPermission) {
                             enableMonitoringAfterPermission = true
@@ -399,7 +418,29 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                             viewModel.registerCompanySsid(ssid)
                             showWifiSearch = false
                         },
-                        onDismiss = { showWifiSearch = false }
+                        onDismiss = { showWifiSearch = false },
+                        // Reflect the just-completed scan on the home icon immediately, instead of
+                        // waiting for the next 60s poll — users tap this icon to check status too.
+                        onScanResult = { ssids ->
+                            companyWifiDetectedNow = ssids.any { ssid -> companyNetworks.any { it.ssid == ssid } }
+                        }
+                    )
+                }
+
+                if (showBeaconSearch) {
+                    BeaconSearchDialog(
+                        registeredTokens = companyBeaconIds.toSet(),
+                        onSelect = { token ->
+                            viewModel.registerCompanyBeacon(token)
+                            // Picking a beacon from the home card is intent to use it, same as the
+                            // settings-screen search — switch parallel detection on if it isn't.
+                            if (!bleEnabled) viewModel.setBleEnabled(true)
+                            showBeaconSearch = false
+                        },
+                        onDismiss = { showBeaconSearch = false },
+                        onScanResult = { tokens ->
+                            companyBeaconDetectedNow = tokens.any { it in companyBeaconIds }
+                        }
                     )
                 }
             }
@@ -411,6 +452,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(s.tabStatus) })
                     Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text(s.tabRecords) })
                     Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text(s.tabLeave) })
+                    Tab(selected = selectedTab == 3, onClick = { selectedTab = 3 }, text = { Text(s.tabHoliday) })
                 }
                 when (selectedTab) {
                     0 -> StatusTab(
@@ -421,6 +463,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         dailyStats = dailyWorkStats,
                         events = allEvents,
                         leaves = leaves,
+                        holidays = holidays,
                         companySsid = representativeSsid,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
@@ -447,13 +490,21 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         onRestoreEvent = viewModel::restoreEvent,
                         modifier = Modifier.weight(1f)
                     )
-                    else -> LeaveTab(
+                    2 -> LeaveTab(
                         leaves = leaves,
                         lunchStartMinute = lunchStartMinute,
                         lunchEndMinute = lunchEndMinute,
                         onAddLeave = viewModel::addLeave,
                         onUpdateLeave = viewModel::updateLeave,
                         onDeleteLeave = viewModel::deleteLeave,
+                        modifier = Modifier.weight(1f)
+                    )
+                    else -> HolidayTab(
+                        holidays = holidays,
+                        syncStatus = holidaySyncStatus,
+                        onSync = viewModel::syncHolidays,
+                        onSaveHoliday = viewModel::saveHoliday,
+                        onDeleteHoliday = viewModel::deleteHoliday,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -525,6 +576,7 @@ private fun CompactStatusCard(
     switchEnabled: Boolean,
     onRegister: () -> Unit,
     onOpenWifiSearch: () -> Unit,
+    onOpenBeaconSearch: () -> Unit,
     onMonitoringChange: (Boolean) -> Unit
 ) {
     // Presence is OR'd across Wi-Fi and BLE, matching the background service's mergePresence, so
@@ -585,16 +637,18 @@ private fun CompactStatusCard(
                         )
                     }
                 }
-                // Live BLE presence indicator, shown only when the beacon is in use. Purely a
-                // status glyph (not clickable): the beacon is registered on the settings screen,
-                // unlike Wi-Fi which is registered from this card.
+                // Live BLE presence indicator, shown only when the beacon is in use. Tapping opens
+                // the same "search nearby beacons and pick one to register" flow as the settings
+                // screen — mirrors the Wi-Fi icon beside it, which does the same for Wi-Fi.
                 if (bleEnabled) {
-                    Icon(
-                        imageVector = if (companyBeaconDetectedNow) Icons.Filled.BluetoothConnected
-                            else Icons.Filled.BluetoothDisabled,
-                        contentDescription = if (companyBeaconDetectedNow) s.beaconDetectedDesc else s.beaconNotDetectedDesc,
-                        tint = contentColor
-                    )
+                    IconButton(onClick = onOpenBeaconSearch) {
+                        Icon(
+                            imageVector = if (companyBeaconDetectedNow) Icons.Filled.BluetoothConnected
+                                else Icons.Filled.BluetoothDisabled,
+                            contentDescription = if (companyBeaconDetectedNow) s.beaconDetectedDesc else s.beaconNotDetectedDesc,
+                            tint = contentColor
+                        )
+                    }
                 }
                 IconButton(onClick = onOpenWifiSearch) {
                     Icon(
@@ -663,7 +717,12 @@ private fun NoticeCard(
  * network, since that flow needs the exact same "search and pick" shape as this one.
  */
 @Composable
-fun WifiSearchDialog(registeredSsids: Set<String>, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+fun WifiSearchDialog(
+    registeredSsids: Set<String>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onScanResult: (List<String>) -> Unit = {}
+) {
     val context = LocalContext.current
     val s = LocalStrings.current
     var ssids by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -674,6 +733,7 @@ fun WifiSearchDialog(registeredSsids: Set<String>, onSelect: (String) -> Unit, o
         delay(1_500)
         ssids = nearbyWifiSsids(context)
         scanning = false
+        onScanResult(ssids)
     }
 
     AlertDialog(

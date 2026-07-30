@@ -8,11 +8,12 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [CommuteEvent::class, LeaveEntry::class], version = 4, exportSchema = false)
+@Database(entities = [CommuteEvent::class, LeaveEntry::class, Holiday::class], version = 5, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class CommuteDatabase : RoomDatabase() {
     abstract fun commuteDao(): CommuteDao
     abstract fun leaveDao(): LeaveDao
+    abstract fun holidayDao(): HolidayDao
 
     companion object {
         @Volatile
@@ -43,6 +44,18 @@ abstract class CommuteDatabase : RoomDatabase() {
             }
         }
 
+        /** Adds the 공휴일/사용자 지정 휴일 table — additive, same reasoning as MIGRATION_2_3. */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `holidays` (" +
+                        "`date` INTEGER NOT NULL PRIMARY KEY, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`source` TEXT NOT NULL)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): CommuteDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -50,7 +63,7 @@ abstract class CommuteDatabase : RoomDatabase() {
                     CommuteDatabase::class.java,
                     "commute.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     // Last-resort only: real data exists now, so proper migrations (above) are the
                     // path across schema changes. This just avoids a crash-loop if an unforeseen
                     // version gap ever appears with no migration.

@@ -27,3 +27,11 @@ fun isWithinMinuteOfDayWindow(timestamp: Long, startMinute: Int, endMinute: Int)
     val minuteOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
     return minuteOfDay in startMinute until endMinute
 }
+
+/** Local-midnight timestamp of January 1st of [year] — the lower bound a 공휴일 resync uses to
+ * scope which AUTO rows it replaces. */
+fun startOfYear(year: Int): Long =
+    Calendar.getInstance().apply {
+        clear()
+        set(year, Calendar.JANUARY, 1)
+    }.timeInMillis

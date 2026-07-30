@@ -2,10 +2,13 @@ package com.commute.app.wifi
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.commute.app.MainActivity
 import com.commute.app.R
 import com.commute.app.Strings
 
@@ -36,6 +39,18 @@ fun ensureNotificationChannels(context: Context, strings: Strings) {
     )
 }
 
+/** Opens the app to its home screen when a notification is tapped. NEW_TASK is required from a
+ * non-Activity context (a Service here); CLEAR_TOP reuses the existing task/instance instead of
+ * stacking a duplicate MainActivity on top if it's already running. */
+private fun openAppPendingIntent(context: Context): PendingIntent {
+    val intent = Intent(context, MainActivity::class.java)
+        .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    return PendingIntent.getActivity(
+        context, 0, intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+}
+
 fun buildMonitorNotification(context: Context, statusText: String) =
     NotificationCompat.Builder(context, MONITOR_CHANNEL_ID)
         .setContentTitle("Commute")
@@ -43,6 +58,7 @@ fun buildMonitorNotification(context: Context, statusText: String) =
         .setSmallIcon(R.drawable.ic_launcher_foreground)
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_MIN)
+        .setContentIntent(openAppPendingIntent(context))
         .build()
 
 /** Reuses one fixed notification id so a new event replaces the previous one in the shade
@@ -56,6 +72,7 @@ fun showEventNotification(context: Context, title: String, text: String) {
         .setSmallIcon(R.drawable.ic_launcher_foreground)
         .setAutoCancel(true)
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(openAppPendingIntent(context))
         .build()
     NotificationManagerCompat.from(context).notify(EVENT_NOTIFICATION_ID, notification)
 }

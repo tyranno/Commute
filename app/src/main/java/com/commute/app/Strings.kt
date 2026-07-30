@@ -133,6 +133,14 @@ interface Strings {
     val todayWorkedInclLunch: String
     val weeklyTotal: String
     val weeklyOvertime: String
+    /** Left StatTile's label when the chart is paged to another week — shows the work time of
+     * that week's day matching today's weekday, e.g. "수 근무시간" while paged to a past week. */
+    fun weekdayWorked(weekday: String): String
+    fun weekdayWorkedInclLunch(weekday: String): String
+    /** Right StatTile's label when paged to another week — that week's own total, not this
+     * week's, so the figure matches the chart it sits above. */
+    val selectedWeekTotal: String
+    val selectedWeekOvertime: String
     fun weekCommuteHeader(range: String): String
     val gotoThisWeek: String
     val rangeThisWeek: String
@@ -170,6 +178,22 @@ interface Strings {
     val noteOptional: String
     val startTimePickerTitle: String
     val endTimePickerTitle: String
+
+    // --- holiday tab ---
+    val tabHoliday: String
+    val addHolidayDesc: String
+    val emptyHolidayMessage: String
+    val holidayAddTitle: String
+    val holidayEditTitle: String
+    val holidayNameLabel: String
+    val holidaySourceAuto: String
+    val holidaySourceCustom: String
+    val syncHolidaysCardTitle: String
+    val syncHolidaysDescription: String
+    val syncHolidaysButton: String
+    val syncingHolidays: String
+    fun syncHolidaysSuccess(count: Int): String
+    fun syncHolidaysFailed(message: String?): String
 
     // --- edit event dialog ---
     val recordAddTitle: String
@@ -375,6 +399,10 @@ object KoStrings : Strings {
     override val todayWorkedInclLunch = "오늘 근무시간 (점심 포함)"
     override val weeklyTotal = "이번주 총 근무시간"
     override val weeklyOvertime = "이번주 초과근무"
+    override fun weekdayWorked(weekday: String) = "$weekday 근무시간"
+    override fun weekdayWorkedInclLunch(weekday: String) = "$weekday 근무시간 (점심 포함)"
+    override val selectedWeekTotal = "해당주 총 근무시간"
+    override val selectedWeekOvertime = "해당주 초과근무"
     override fun weekCommuteHeader(range: String) = "이번주 출퇴근 시간($range)"
     override val gotoThisWeek = "이번주로"
     override val rangeThisWeek = "이번주"
@@ -409,6 +437,21 @@ object KoStrings : Strings {
     override val noteOptional = "메모 (선택)"
     override val startTimePickerTitle = "시작 시각 선택"
     override val endTimePickerTitle = "종료 시각 선택"
+
+    override val tabHoliday = "휴일"
+    override val addHolidayDesc = "휴일 추가"
+    override val emptyHolidayMessage = "등록된 휴일이 없습니다.\n동기화하거나 아래 + 버튼으로 직접 추가하세요."
+    override val holidayAddTitle = "휴일 추가"
+    override val holidayEditTitle = "휴일 수정"
+    override val holidayNameLabel = "휴일 이름"
+    override val holidaySourceAuto = "공휴일"
+    override val holidaySourceCustom = "직접 지정"
+    override val syncHolidaysCardTitle = "공휴일 동기화"
+    override val syncHolidaysDescription = "대한민국 공휴일을 올해·내년분 가져와 아래 목록과 홈 화면 주간 그래프에 표시합니다. 직접 추가한 휴일은 동기화해도 바뀌지 않습니다."
+    override val syncHolidaysButton = "동기화"
+    override val syncingHolidays = "동기화 중…"
+    override fun syncHolidaysSuccess(count: Int) = "공휴일 ${count}건 동기화 완료"
+    override fun syncHolidaysFailed(message: String?) = "동기화 실패: $message"
 
     override val recordAddTitle = "기록 추가"
     override val recordEditTitle = "기록 수정"
@@ -616,6 +659,10 @@ object EnStrings : Strings {
     override val todayWorkedInclLunch = "Today (incl. lunch)"
     override val weeklyTotal = "This week"
     override val weeklyOvertime = "This week overtime"
+    override fun weekdayWorked(weekday: String) = "$weekday hours"
+    override fun weekdayWorkedInclLunch(weekday: String) = "$weekday hours (incl. lunch)"
+    override val selectedWeekTotal = "That week's total"
+    override val selectedWeekOvertime = "That week's overtime"
     override fun weekCommuteHeader(range: String) = "This week's hours ($range)"
     override val gotoThisWeek = "This week"
     override val rangeThisWeek = "This week"
@@ -650,6 +697,21 @@ object EnStrings : Strings {
     override val noteOptional = "Note (optional)"
     override val startTimePickerTitle = "Select start time"
     override val endTimePickerTitle = "Select end time"
+
+    override val tabHoliday = "Holidays"
+    override val addHolidayDesc = "Add holiday"
+    override val emptyHolidayMessage = "No holidays yet.\nSync, or tap + below to add one yourself."
+    override val holidayAddTitle = "Add holiday"
+    override val holidayEditTitle = "Edit holiday"
+    override val holidayNameLabel = "Holiday name"
+    override val holidaySourceAuto = "Public holiday"
+    override val holidaySourceCustom = "Custom"
+    override val syncHolidaysCardTitle = "Sync holidays"
+    override val syncHolidaysDescription = "Fetches South Korea's public holidays for this year and next into the list below and the home screen's weekly chart. Holidays you added yourself aren't changed by a sync."
+    override val syncHolidaysButton = "Sync"
+    override val syncingHolidays = "Syncing…"
+    override fun syncHolidaysSuccess(count: Int) = "Synced $count holidays"
+    override fun syncHolidaysFailed(message: String?) = "Sync failed: $message"
 
     override val recordAddTitle = "Add record"
     override val recordEditTitle = "Edit record"

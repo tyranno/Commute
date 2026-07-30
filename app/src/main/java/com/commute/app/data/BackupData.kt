@@ -37,7 +37,8 @@ data class BackupSettings(
 data class ParsedBackup(
     val settings: BackupSettings,
     val events: List<CommuteEvent>,
-    val leaves: List<LeaveEntry>
+    val leaves: List<LeaveEntry>,
+    val holidays: List<Holiday>
 )
 
 /** Serializes all commute events plus durable settings into a JSON backup file the user can
@@ -47,6 +48,7 @@ data class ParsedBackup(
 fun buildBackupJson(
     events: List<CommuteEvent>,
     leaves: List<LeaveEntry>,
+    holidays: List<Holiday>,
     settings: BackupSettings,
     exportedAt: Long
 ): String {
@@ -112,6 +114,20 @@ fun buildBackupJson(
                         put("startMinute", leave.startMinute ?: JSONObject.NULL)
                         put("endMinute", leave.endMinute ?: JSONObject.NULL)
                         put("note", leave.note)
+                    }
+                )
+            }
+        }
+    )
+    root.put(
+        "holidays",
+        JSONArray().apply {
+            holidays.forEach { holiday ->
+                put(
+                    JSONObject().apply {
+                        put("date", holiday.date)
+                        put("name", holiday.name)
+                        put("source", holiday.source.name)
                     }
                 )
             }
@@ -212,5 +228,15 @@ fun parseBackupJson(json: String): ParsedBackup {
             note = leaveJson.optString("note", "")
         )
     }
-    return ParsedBackup(settings, events, leaves)
+    // Absent in backups predating the 휴일 feature — an older file simply has no holidays.
+    val holidaysJson = root.optJSONArray("holidays")
+    val holidays = if (holidaysJson == null) emptyList() else (0 until holidaysJson.length()).map { index ->
+        val holidayJson = holidaysJson.getJSONObject(index)
+        Holiday(
+            date = holidayJson.getLong("date"),
+            name = holidayJson.getString("name"),
+            source = HolidaySource.valueOf(holidayJson.getString("source"))
+        )
+    }
+    return ParsedBackup(settings, events, leaves, holidays)
 }

@@ -991,10 +991,16 @@ private fun BeaconEditor(
  * Scans briefly for nearby office-format beacons and lists their tokens (strongest first) for the
  * user to pick — the BLE mirror of [WifiSearchDialog], including the same already-registered
  * marker per row. Distinguishes "Bluetooth is off" from "found nothing", since the fix for each is
- * different.
+ * different. Not private: also used from [com.commute.app.MainActivity]'s home-card beacon icon,
+ * the same way [WifiSearchDialog] is shared with the Wi-Fi icon there.
  */
 @Composable
-private fun BeaconSearchDialog(registeredTokens: Set<String>, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+fun BeaconSearchDialog(
+    registeredTokens: Set<String>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onScanResult: (List<String>) -> Unit = {}
+) {
     val context = LocalContext.current
     val s = LocalStrings.current
     var tokens by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -1009,6 +1015,7 @@ private fun BeaconSearchDialog(registeredTokens: Set<String>, onSelect: (String)
         }
         tokens = scanNearbyBeacons(context)
         scanning = false
+        onScanResult(tokens)
     }
 
     AlertDialog(

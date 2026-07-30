@@ -68,12 +68,14 @@ import com.commute.app.data.MinuteSpan
 import com.commute.app.data.subtractSpans
 import com.commute.app.data.DAILY_REQUIRED_MINUTES
 import com.commute.app.data.DailyWorkStat
+import com.commute.app.data.Holiday
 import com.commute.app.data.LeaveEntry
 import com.commute.app.data.LeaveType
 import com.commute.app.data.MissingRecordFlag
 import com.commute.app.data.MissingRecordType
 import com.commute.app.data.findMissingRecords
 import com.commute.app.data.formatMinuteOfDayToHHmm
+import com.commute.app.data.overtimeMinutesForWeek
 import com.commute.app.data.startOfDay
 import com.commute.app.data.startOfWeek
 import java.text.SimpleDateFormat
@@ -95,6 +97,7 @@ fun StatusTab(
     dailyStats: List<DailyWorkStat>,
     events: List<CommuteEvent>,
     leaves: List<LeaveEntry>,
+    holidays: List<Holiday>,
     companySsid: String?,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
@@ -126,6 +129,27 @@ fun StatusTab(
     }
     val weekStart = startOfWeek(System.currentTimeMillis()) + weekOffset * WEEK_DAYS * DAY_MS
 
+    // Paging the chart to another week used to leave these two tiles stuck on 이번주's figures —
+    // confusing since the chart right below them had already moved on. While weekOffset == 0
+    // they still read straight off the ViewModel flows (which apply extra bounds against a
+    // mistyped future date, see weeklyWorkedMinutes); any other week is recomputed here from the
+    // same dailyStats the chart itself uses, scoped to that week's own date range.
+    val isThisWeek = weekOffset == 0
+    val displayedWeekday = run {
+        val now = System.currentTimeMillis()
+        val todayOffset = ((startOfDay(now) - startOfWeek(now)) / DAY_MS).toInt()
+        weekStart + todayOffset * DAY_MS
+    }
+    val displayedDayStat = dailyStats.firstOrNull { it.dayStart == displayedWeekday }
+    val displayedDayMinutes = if (isThisWeek) todayMinutes else displayedDayStat?.creditedMinutes ?: 0L
+    val displayedDayMinutesInclLunch = if (isThisWeek) todayMinutesIncludingLunch
+        else displayedDayStat?.let { it.rawSpanMinutes + it.leaveMinutes } ?: 0L
+    val displayedWeekEnd = weekStart + WEEK_DAYS * DAY_MS
+    val displayedWeekMinutes = if (isThisWeek) weeklyMinutes
+        else dailyStats.filter { it.dayStart in weekStart until displayedWeekEnd }.sumOf { it.creditedMinutes }
+    val displayedWeekOvertimeMinutes = if (isThisWeek) weeklyOvertimeMinutes
+        else overtimeMinutesForWeek(dailyStats, weekStart, System.currentTimeMillis())
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -139,8 +163,12 @@ fun StatusTab(
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatTile(
-                        label = if (showTodayIncludingLunch) s.todayWorkedInclLunch else s.todayWorked,
-                        valueText = s.workHoursMinutes(if (showTodayIncludingLunch) todayMinutesIncludingLunch else todayMinutes),
+                        label = if (showTodayIncludingLunch) {
+                            if (isThisWeek) s.todayWorkedInclLunch else s.weekdayWorkedInclLunch(s.weekday(displayedWeekday))
+                        } else {
+                            if (isThisWeek) s.todayWorked else s.weekdayWorked(s.weekday(displayedWeekday))
+                        },
+                        valueText = s.workHoursMinutes(if (showTodayIncludingLunch) displayedDayMinutesInclLunch else displayedDayMinutes),
                         modifier = Modifier.weight(1f),
                         onClick = { showTodayIncludingLunch = !showTodayIncludingLunch }
                     )
@@ -149,9 +177,13 @@ fun StatusTab(
                     // overtime isn't shown at rest to keep the card calm. Scoped to this week to match
                     // the 이번주 총 근무시간 it toggles from — the same 이번주 기록 basis (오늘 제외).
                     StatTile(
-                        label = if (showTotalOvertime) s.weeklyOvertime else s.weeklyTotal,
-                        valueText = if (showTotalOvertime) s.signedMinutes(weeklyOvertimeMinutes)
-                            else s.workHoursMinutes(weeklyMinutes),
+                        label = if (showTotalOvertime) {
+                            if (isThisWeek) s.weeklyOvertime else s.selectedWeekOvertime
+                        } else {
+                            if (isThisWeek) s.weeklyTotal else s.selectedWeekTotal
+                        },
+                        valueText = if (showTotalOvertime) s.signedMinutes(displayedWeekOvertimeMinutes)
+                            else s.workHoursMinutes(displayedWeekMinutes),
                         modifier = Modifier.weight(1f),
                         onClick = {
                             if (showTotalOvertime) showTotalOvertime = false
@@ -174,6 +206,7 @@ fun StatusTab(
                 WeeklyRangeChart(
                     stats = dailyStats,
                     leaves = leaves,
+                    holidays = holidays,
                     events = events,
                     weekStart = weekStart,
                     lunchStartMinute = lunchStartMinute,
@@ -502,6 +535,7 @@ private fun StatTile(
 private fun WeeklyRangeChart(
     stats: List<DailyWorkStat>,
     leaves: List<LeaveEntry>,
+    holidays: List<Holiday>,
     events: List<CommuteEvent>,
     weekStart: Long,
     lunchStartMinute: Int,
@@ -525,10 +559,12 @@ private fun WeeklyRangeChart(
     val days = (0 until visibleDayCount).map { weekStart + it * DAY_MS }
     val statByDay = stats.associateBy { it.dayStart }
     val leavesByDay = leaves.groupBy { startOfDay(it.date) }
+    val holidaysByDay = holidays.associateBy { startOfDay(it.date) }
     val eventsByDay = events.groupBy { startOfDay(it.timestamp) }
     val barColor = MaterialTheme.colorScheme.primary
     val lunchColor = MaterialTheme.colorScheme.tertiary
     val leaveColor = MaterialTheme.colorScheme.secondary
+    val holidayColor = MaterialTheme.colorScheme.error
     // Warm amber for the 8시간 초과 portion of a bar — a fixed hue (not a theme role) so it reads
     // clearly as "초과근무" and stays distinct from the blue bar, the lighter-blue lunch band, and
     // the secondary-toned leave blocks in both light and dark themes.
@@ -620,6 +656,37 @@ private fun WeeklyRangeChart(
             days.forEachIndexed { index, day ->
                 val left = chartLeft + index * slotWidth + (slotWidth - barWidth) / 2f
                 val alpha = if (day == today) 1f else 0.55f
+
+                // A synced or user-declared holiday renders the same hollow dashed block as a
+                // declared leave (rather than tinting the whole column), spanning the full workday
+                // and labelled with its name, so it reads at the same visual weight as 연차 instead
+                // of dominating the chart.
+                holidaysByDay[day]?.let { holiday ->
+                    val blockTop = yFor(halfPmEndMinute)
+                    val blockBottom = yFor(halfAmStartMinute).coerceAtLeast(blockTop + 6f)
+                    val rect = Rect(left, blockTop, left + barWidth, blockBottom)
+                    drawPath(
+                        Path().apply { addRoundRect(RoundRect(rect = rect, cornerRadius = corner)) },
+                        color = holidayColor.copy(alpha = alpha * 0.15f)
+                    )
+                    drawRoundRect(
+                        color = holidayColor.copy(alpha = alpha),
+                        topLeft = Offset(rect.left, rect.top),
+                        size = Size(rect.width, rect.height),
+                        cornerRadius = corner,
+                        style = leaveStroke
+                    )
+                    val measured = textMeasurer.measure(holiday.name, style = barTimeStyle)
+                    val maxX = (size.width - measured.size.width).coerceAtLeast(0f)
+                    val maxY = (size.height - measured.size.height).coerceAtLeast(0f)
+                    drawText(
+                        measured,
+                        topLeft = Offset(
+                            ((rect.left + rect.right) / 2f - measured.size.width / 2f).coerceIn(0f, maxX),
+                            ((rect.top + rect.bottom) / 2f - measured.size.height / 2f).coerceIn(0f, maxY)
+                        )
+                    )
+                }
 
                 // Declared 연차/반차/외출 render as hollow (dashed, faintly-filled) blocks over their
                 // time-of-day window with a short label inside — "약간 빈 막대구간". Drawn before the
@@ -776,7 +843,8 @@ private fun WeeklyRangeChart(
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (holidaysByDay[day] != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
