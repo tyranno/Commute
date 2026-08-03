@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.BeachAccess
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Language
@@ -95,7 +96,8 @@ private data class ApRow(val ssid: String, val bssid: String?)
 fun SettingsScreen(
     viewModel: CommuteViewModel = viewModel(),
     onBack: () -> Unit = {},
-    onOpenPolicyDocument: () -> Unit = {}
+    onOpenPolicyDocument: () -> Unit = {},
+    onOpenDiagnosticLog: () -> Unit = {}
 ) {
     val companyNetworks by viewModel.companyNetworks.collectAsState()
     val bleEnabled by viewModel.bleEnabled.collectAsState()
@@ -358,6 +360,24 @@ fun SettingsScreen(
                                     else s.noRecoverable
                                 )
                             }
+                        }
+                    }
+
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Filled.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(s.diagnosticCardTitle, style = MaterialTheme.typography.titleSmall)
+                            }
+                            Text(
+                                s.diagnosticCardDescription,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                onClick = onOpenDiagnosticLog,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text(s.openDiagnosticLog) }
                         }
                     }
 

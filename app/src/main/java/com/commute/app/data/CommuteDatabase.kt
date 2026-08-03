@@ -8,12 +8,17 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [CommuteEvent::class, LeaveEntry::class, Holiday::class], version = 5, exportSchema = false)
+@Database(
+    entities = [CommuteEvent::class, LeaveEntry::class, Holiday::class, DiagnosticEvent::class],
+    version = 7,
+    exportSchema = false
+)
 @TypeConverters(Converters::class)
 abstract class CommuteDatabase : RoomDatabase() {
     abstract fun commuteDao(): CommuteDao
     abstract fun leaveDao(): LeaveDao
     abstract fun holidayDao(): HolidayDao
+    abstract fun diagnosticEventDao(): DiagnosticEventDao
 
     companion object {
         @Volatile
@@ -56,6 +61,40 @@ abstract class CommuteDatabase : RoomDatabase() {
             }
         }
 
+        /** Adds the 진단 로그 table (Wi-Fi/BLE scan results + 판정 근거 behind each poll) — additive,
+         * same reasoning as MIGRATION_2_3/4_5. Pruned by age at runtime, not migrated away. */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `diagnostic_events` (" +
+                        "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                        "`timestamp` INTEGER NOT NULL, " +
+                        "`wifiNearby` INTEGER NOT NULL, " +
+                        "`wifiSsid` TEXT, " +
+                        "`bleNearby` INTEGER NOT NULL, " +
+                        "`bleToken` TEXT, " +
+                        "`bleSkipped` INTEGER NOT NULL, " +
+                        "`wasAtWork` INTEGER NOT NULL, " +
+                        "`isAtWorkAfter` INTEGER NOT NULL, " +
+                        "`action` TEXT, " +
+                        "`reason` TEXT)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_diagnostic_events_timestamp` " +
+                        "ON `diagnostic_events` (`timestamp`)"
+                )
+            }
+        }
+
+        /** Adds [DiagnosticEvent.bleSkipped] — additive, same reasoning as MIGRATION_2_3/4_5. */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `diagnostic_events` ADD COLUMN `bleSkipped` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getInstance(context: Context): CommuteDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -63,7 +102,7 @@ abstract class CommuteDatabase : RoomDatabase() {
                     CommuteDatabase::class.java,
                     "commute.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     // Last-resort only: real data exists now, so proper migrations (above) are the
                     // path across schema changes. This just avoids a crash-loop if an unforeseen
                     // version gap ever appears with no migration.

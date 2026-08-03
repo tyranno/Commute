@@ -10,6 +10,7 @@ import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CompanyNetwork
 import com.commute.app.data.DailyWorkStat
+import com.commute.app.data.DiagnosticEvent
 import com.commute.app.data.Holiday
 import com.commute.app.data.HolidaySource
 import com.commute.app.data.LeaveEntry
@@ -59,6 +60,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     private val dao = database.commuteDao()
     private val leaveDao = database.leaveDao()
     private val holidayDao = database.holidayDao()
+    private val diagnosticEventDao = database.diagnosticEventDao()
 
     /** Append-only, DB-independent mirror of every event — the safety net that lets a wiped or
      * partially-lost history be rebuilt (see [RecoveryJournal] and [recoverFromJournal]). */
@@ -512,6 +514,14 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
             Toast.makeText(app, msg, Toast.LENGTH_SHORT).show()
         }
     }
+
+    /** Diagnostic 로그 뷰어's data source — Wi-Fi/BLE scan results and 판정 근거 for the calendar
+     * day starting at [dayStart] (see [startOfDay]). A fresh Flow per call rather than a cached
+     * StateFlow like [events]: this table is queried one day at a time and can hold tens of
+     * thousands of rows (one per 60s poll, pruned to a rolling 30-day window), so it isn't kept
+     * fully loaded in memory the way the much smaller commute-event history is. */
+    fun diagnosticEventsForDay(dayStart: Long): Flow<List<DiagnosticEvent>> =
+        diagnosticEventDao.observeBetween(dayStart, dayStart + 24 * 60 * 60 * 1000L)
 
     /** Writes every recorded event plus the durable settings to [uri] as JSON — since it's
      * saved outside the app's private storage (wherever the user picks via the system file

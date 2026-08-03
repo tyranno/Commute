@@ -19,6 +19,9 @@ import com.commute.app.ble.representativeCompanyBeacon
 import com.commute.app.data.CommuteDatabase
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
+import com.commute.app.data.DiagnosticAction
+import com.commute.app.data.DiagnosticEvent
+import com.commute.app.data.DiagnosticReason
 import com.commute.app.data.RecoveryJournal
 import com.commute.app.data.SettingsRepository
 import com.commute.app.data.timestampAtMinuteOfDay
@@ -206,6 +209,9 @@ class WifiMonitorService : Service() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var recoveryJournal: RecoveryJournal
     private var monitorJob: Job? = null
+    /** Last time [logDiagnostic] pruned old rows — throttled to roughly once an hour so a 60s poll
+     * loop doesn't run a DELETE on every single tick. */
+    private var lastDiagnosticPruneAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -280,6 +286,12 @@ class WifiMonitorService : Service() {
             // Nothing to detect against — neither the Wi-Fi nor the beacon is registered.
             if (!wifiRegistered && !bleRegistered) return@withLock
 
+            // Filled in by whichever branch below fires; both stay null on a poll that changed
+            // nothing. Logged alongside the raw scan results at the end of this function so a bad
+            // recording can be traced back to what detection actually saw at the time.
+            var diagAction: String? = null
+            var diagReason: String? = null
+
             // Keeps the OS's scan cache fresh even while we're *not* actually connected to the
             // office AP (Wi-Fi off, on LTE, or associated with something else) — detectCompanyNetworks
             // below only reads that cache, and relying solely on whatever other apps or the
@@ -301,7 +313,8 @@ class WifiMonitorService : Service() {
             // office, since presence is settled either way and a live BLE scan (no OS-cached results,
             // so it has to listen for a few seconds every poll) is pure battery cost once redundant.
             // When it does run it's safe under the alarm poll's 30s wakelock.
-            val bleDetection = if (bleRegistered && !wifiDetection.nearby) {
+            val bleScanRan = bleRegistered && !wifiDetection.nearby
+            val bleDetection = if (bleScanRan) {
                 detectCompanyBeacons(applicationContext, beaconIds)
             } else {
                 CompanyBeaconDetection(nearby = false, observedAt = null, lastObservedAt = null)
@@ -317,6 +330,7 @@ class WifiMonitorService : Service() {
             val detection = mergePresence(wifiDetection, bleDetection)
             val companyWifiNearby = detection.nearby
             var wasAtWork = settingsRepository.isAtWork.first()
+            val wasAtWorkAtStart = wasAtWork
             val now = System.currentTimeMillis()
 
             // A session must never silently span a calendar day boundary: if we're still
@@ -338,6 +352,7 @@ class WifiMonitorService : Service() {
                     settingsRepository.clearProvisionalAwaySinceAt()
                     settingsRepository.clearAutoLeaveEvent()
                     wasAtWork = false
+                    diagReason = DiagnosticReason.RESET_CORRUPT_STATE
                 } else if (!isSameDay(lastSeen, now)) {
                     // State first, insert second. This coroutine is cancelled whenever the
                     // service stops (every monitoring toggle), and a cancel *between* the two
@@ -364,6 +379,8 @@ class WifiMonitorService : Service() {
                         s.notifDayChangeClose(timeFormat.format(Date(leftAt)))
                     )
                     wasAtWork = false
+                    diagAction = DiagnosticAction.LEAVE
+                    diagReason = DiagnosticReason.DAY_BOUNDARY
                 }
             }
 
@@ -410,6 +427,8 @@ class WifiMonitorService : Service() {
                                 timeFormat.format(Date(now))
                             )
                         )
+                        diagAction = DiagnosticAction.AWAY_REVERTED
+                        diagReason = DiagnosticReason.RETURNED_SAME_DAY
                     } else {
                         // Stamped with when the OS actually saw the AP, not when this poll got to
                         // run — those differ by minutes whenever the device was dozing. See
@@ -423,6 +442,8 @@ class WifiMonitorService : Service() {
                             s.notifClockInTitle,
                             s.notifClockInBody(presenceLabel, timeFormat.format(Date(arrivedAt)))
                         )
+                        diagAction = DiagnosticAction.ARRIVE
+                        diagReason = DiagnosticReason.FRESH_ARRIVE
                     }
                 } else {
                     // Reconnected while still "at work": the session itself never ends here, but
@@ -444,6 +465,8 @@ class WifiMonitorService : Service() {
                                 s.notifAwayEndTitle,
                                 s.notifAwayEndBody(timeFormat.format(Date(now)), minutesBetween(awaySince, now))
                             )
+                            diagAction = DiagnosticAction.AWAY
+                            diagReason = DiagnosticReason.THRESHOLD_MET
                         }
                     }
                 }
@@ -460,9 +483,11 @@ class WifiMonitorService : Service() {
                     val provisionalSince = settingsRepository.provisionalAwaySinceAt.first()
                     if (provisionalSince == null) {
                         settingsRepository.setProvisionalAwaySinceAt(now)
+                        diagReason = DiagnosticReason.PROVISIONAL_MISS
                     } else {
                         settingsRepository.setAwaySinceAt(provisionalSince)
                         settingsRepository.clearProvisionalAwaySinceAt()
+                        diagReason = DiagnosticReason.AWAY_STARTED
                     }
                 }
 
@@ -471,11 +496,12 @@ class WifiMonitorService : Service() {
                 // return still resolves as a plain 자리비움 — the decision is only made once
                 // there's enough elapsed time to be sure the person isn't coming back.
                 val awaySince = settingsRepository.awaySinceAt.first()
+                val autoLeaveAfterAwayMinutes = settingsRepository.autoLeaveAfterAwayMinutes.first()
                 if (awaySince != null &&
                     autoLeaveDue(
                         awaySince,
                         now,
-                        settingsRepository.autoLeaveAfterAwayMinutes.first(),
+                        autoLeaveAfterAwayMinutes,
                         settingsRepository.workEndMinute.first()
                     )
                 ) {
@@ -511,8 +537,16 @@ class WifiMonitorService : Service() {
                         s.notifClockOutTitle,
                         s.notifAutoCloseAwayBody(timeFormat.format(Date(leftAt)))
                     )
+                    diagAction = DiagnosticAction.LEAVE
+                    diagReason = if (now - awaySince >= autoLeaveAfterAwayMinutes * 60_000L) {
+                        DiagnosticReason.AUTO_LEAVE_TIMEOUT
+                    } else {
+                        DiagnosticReason.AUTO_LEAVE_WORKEND
+                    }
                 }
             }
+
+            logDiagnostic(now, wifiDetection, bleDetection, !bleScanRan, wasAtWorkAtStart, diagAction, diagReason)
         }
     }
 
@@ -591,6 +625,41 @@ class WifiMonitorService : Service() {
         recoveryJournal.append(away)
     }
 
+    /**
+     * Records what this poll saw and decided, regardless of whether anything was recorded — the
+     * diagnostic 로그 뷰어's raw material. Also prunes rows older than [DIAGNOSTIC_RETENTION_MS],
+     * throttled by [lastDiagnosticPruneAt] so the DELETE doesn't run on every single poll.
+     */
+    private suspend fun logDiagnostic(
+        timestamp: Long,
+        wifiDetection: CompanyWifiDetection,
+        bleDetection: CompanyBeaconDetection,
+        bleSkipped: Boolean,
+        wasAtWork: Boolean,
+        action: String?,
+        reason: String?
+    ) {
+        val diagnosticEventDao = CommuteDatabase.getInstance(applicationContext).diagnosticEventDao()
+        diagnosticEventDao.insert(
+            DiagnosticEvent(
+                timestamp = timestamp,
+                wifiNearby = wifiDetection.nearby,
+                wifiSsid = wifiDetection.matchedSsid,
+                bleNearby = bleDetection.nearby,
+                bleToken = bleDetection.matchedToken,
+                bleSkipped = bleSkipped,
+                wasAtWork = wasAtWork,
+                isAtWorkAfter = settingsRepository.isAtWork.first(),
+                action = action,
+                reason = reason
+            )
+        )
+        if (timestamp - lastDiagnosticPruneAt > DIAGNOSTIC_PRUNE_INTERVAL_MS) {
+            lastDiagnosticPruneAt = timestamp
+            diagnosticEventDao.deleteOlderThan(timestamp - DIAGNOSTIC_RETENTION_MS)
+        }
+    }
+
     /** Newest row, used to check whether the auto-leave 퇴근 is still the last thing on record. */
     private suspend fun latestEvent(): CommuteEvent? =
         CommuteDatabase.getInstance(applicationContext).commuteDao().getLast()
@@ -623,6 +692,8 @@ class WifiMonitorService : Service() {
         private const val ACTION_POLL = "com.commute.app.action.POLL"
         private const val WAKELOCK_TAG = "commute:poll"
         private const val WAKELOCK_TIMEOUT_MS = 30_000L
+        private const val DIAGNOSTIC_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+        private const val DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000L
 
         private fun pollPendingIntent(context: Context): PendingIntent = PendingIntent.getForegroundService(
             context,

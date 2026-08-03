@@ -275,16 +275,16 @@ fun blankEventTemplate(day: Long, ssid: String?): CommuteEvent {
     return CommuteEvent(id = 0L, type = CommuteEventType.ARRIVE, ssid = ssid ?: "", timestamp = day + timeOfDay)
 }
 
-/** A blank record prefilled to fix a [MissingRecordFlag] — the opposite type, defaulted an hour
- * before/after the flagged event as a plausible starting point the user then adjusts with the
- * date/time pickers. */
+/** A blank record prefilled to fix a [MissingRecordFlag] — the opposite type, on the flagged
+ * event's day but defaulted to the current time-of-day (the user is typically fixing this right
+ * as they notice it, e.g. forgot to check out and is doing so now) as a starting point the user
+ * then adjusts with the date/time pickers. */
 fun missingEventTemplate(flag: MissingRecordFlag, ssid: String?): CommuteEvent {
-    val oneHourMs = 60 * 60 * 1000L
-    return if (flag.type == MissingRecordType.LEAVE_MISSING) {
-        CommuteEvent(id = 0L, type = CommuteEventType.LEAVE, ssid = ssid ?: flag.event.ssid, timestamp = flag.event.timestamp + oneHourMs)
-    } else {
-        CommuteEvent(id = 0L, type = CommuteEventType.ARRIVE, ssid = ssid ?: flag.event.ssid, timestamp = flag.event.timestamp - oneHourMs)
-    }
+    val day = startOfDay(flag.event.timestamp)
+    val now = System.currentTimeMillis()
+    val timeOfDay = now - startOfDay(now)
+    val type = if (flag.type == MissingRecordType.LEAVE_MISSING) CommuteEventType.LEAVE else CommuteEventType.ARRIVE
+    return CommuteEvent(id = 0L, type = type, ssid = ssid ?: flag.event.ssid, timestamp = day + timeOfDay)
 }
 
 private fun hourOf(timestamp: Long): Int = Calendar.getInstance().apply { timeInMillis = timestamp }.get(Calendar.HOUR_OF_DAY)

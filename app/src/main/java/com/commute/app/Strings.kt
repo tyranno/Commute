@@ -2,6 +2,8 @@ package com.commute.app
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.commute.app.data.CommuteEventType
+import com.commute.app.data.DiagnosticAction
+import com.commute.app.data.DiagnosticReason
 import com.commute.app.data.LeaveType
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -257,6 +259,50 @@ interface Strings {
     val resetButton: String
     val resetDialogMessage: String
 
+    // --- diagnostic log (Wi-Fi/BLE 판정 근거 뷰어) ---
+    val diagnosticCardTitle: String
+    val diagnosticCardDescription: String
+    val openDiagnosticLog: String
+    val diagnosticLogTitle: String
+    val diagnosticLogEmpty: String
+    val diagnosticWifiDetected: String
+    val diagnosticWifiNotDetected: String
+    val diagnosticBleDetected: String
+    val diagnosticBleNotDetected: String
+    val diagnosticBleSkipped: String
+    val diagnosticActionArrive: String
+    val diagnosticActionAway: String
+    val diagnosticActionLeave: String
+    val diagnosticActionAwayReverted: String
+    val diagnosticReasonFreshArrive: String
+    val diagnosticReasonDayBoundary: String
+    val diagnosticReasonAutoLeaveTimeout: String
+    val diagnosticReasonAutoLeaveWorkend: String
+    val diagnosticReasonThresholdMet: String
+    val diagnosticReasonReturnedSameDay: String
+    val diagnosticReasonProvisionalMiss: String
+    val diagnosticReasonAwayStarted: String
+    val diagnosticReasonResetCorruptState: String
+    fun diagnosticActionLabel(action: String?): String = when (action) {
+        DiagnosticAction.ARRIVE -> diagnosticActionArrive
+        DiagnosticAction.AWAY -> diagnosticActionAway
+        DiagnosticAction.LEAVE -> diagnosticActionLeave
+        DiagnosticAction.AWAY_REVERTED -> diagnosticActionAwayReverted
+        else -> "-"
+    }
+    fun diagnosticReasonLabel(reason: String?): String = when (reason) {
+        DiagnosticReason.FRESH_ARRIVE -> diagnosticReasonFreshArrive
+        DiagnosticReason.DAY_BOUNDARY -> diagnosticReasonDayBoundary
+        DiagnosticReason.AUTO_LEAVE_TIMEOUT -> diagnosticReasonAutoLeaveTimeout
+        DiagnosticReason.AUTO_LEAVE_WORKEND -> diagnosticReasonAutoLeaveWorkend
+        DiagnosticReason.THRESHOLD_MET -> diagnosticReasonThresholdMet
+        DiagnosticReason.RETURNED_SAME_DAY -> diagnosticReasonReturnedSameDay
+        DiagnosticReason.PROVISIONAL_MISS -> diagnosticReasonProvisionalMiss
+        DiagnosticReason.AWAY_STARTED -> diagnosticReasonAwayStarted
+        DiagnosticReason.RESET_CORRUPT_STATE -> diagnosticReasonResetCorruptState
+        else -> ""
+    }
+
     // --- policy document ---
     val policyTitle: String
     val policyDocDesc: String
@@ -508,6 +554,30 @@ object KoStrings : Strings {
     override val resetDescription = "출퇴근 기록과 연차/반차/외출 기록을 모두 삭제합니다. 회사 Wi-Fi·비콘 등록과 설정은 그대로 유지됩니다. 삭제된 기록은 되돌릴 수 없습니다."
     override val resetButton = "기록 전체 삭제"
     override val resetDialogMessage = "모든 출퇴근·연차 기록이 영구 삭제됩니다. 계속할까요?"
+
+    override val diagnosticCardTitle = "진단 로그"
+    override val diagnosticCardDescription = "Wi-Fi/BLE 감지 결과와 출근·자리비움·퇴근 판정 근거를 날짜별로 확인합니다. 최근 30일간 보관됩니다."
+    override val openDiagnosticLog = "진단 로그 보기"
+    override val diagnosticLogTitle = "진단 로그"
+    override val diagnosticLogEmpty = "이 날짜에는 기록된 로그가 없습니다"
+    override val diagnosticWifiDetected = "Wi-Fi 감지"
+    override val diagnosticWifiNotDetected = "Wi-Fi 미감지"
+    override val diagnosticBleDetected = "비콘 감지"
+    override val diagnosticBleNotDetected = "비콘 미감지"
+    override val diagnosticBleSkipped = "비콘 생략"
+    override val diagnosticActionArrive = "출근 기록"
+    override val diagnosticActionAway = "자리비움 기록"
+    override val diagnosticActionLeave = "퇴근 기록"
+    override val diagnosticActionAwayReverted = "퇴근→자리비움 정정"
+    override val diagnosticReasonFreshArrive = "회사 감지되어 출근 처리"
+    override val diagnosticReasonDayBoundary = "날짜 경계 자동 마감"
+    override val diagnosticReasonAutoLeaveTimeout = "자리비움 장시간 지속으로 자동 퇴근 처리"
+    override val diagnosticReasonAutoLeaveWorkend = "근무 인정 시간 종료로 자동 퇴근 처리"
+    override val diagnosticReasonThresholdMet = "자리비움 인정 기준 충족"
+    override val diagnosticReasonReturnedSameDay = "같은 날 복귀하여 퇴근을 자리비움으로 정정"
+    override val diagnosticReasonProvisionalMiss = "일시적 미감지 (판정 대기)"
+    override val diagnosticReasonAwayStarted = "미감지 지속되어 자리비움 시작"
+    override val diagnosticReasonResetCorruptState = "손상된 상태 초기화"
 
     override val policyTitle = "가산 연구소 운영 방안"
     override val policyDocDesc = "가산 연구소 운영 방안 문서"
@@ -768,6 +838,30 @@ object EnStrings : Strings {
     override val resetDescription = "Deletes all commute records and leave entries. Office Wi-Fi/beacon registration and settings are kept. Deleted records can't be recovered."
     override val resetButton = "Delete all records"
     override val resetDialogMessage = "All commute and leave records will be permanently deleted. Continue?"
+
+    override val diagnosticCardTitle = "Diagnostic log"
+    override val diagnosticCardDescription = "Review Wi-Fi/BLE detection results and the reasoning behind each clock-in/away/clock-out decision, by day. Kept for the last 30 days."
+    override val openDiagnosticLog = "View diagnostic log"
+    override val diagnosticLogTitle = "Diagnostic log"
+    override val diagnosticLogEmpty = "No log entries for this day"
+    override val diagnosticWifiDetected = "Wi-Fi detected"
+    override val diagnosticWifiNotDetected = "Wi-Fi not detected"
+    override val diagnosticBleDetected = "Beacon detected"
+    override val diagnosticBleNotDetected = "Beacon not detected"
+    override val diagnosticBleSkipped = "Beacon skipped"
+    override val diagnosticActionArrive = "Recorded arrive"
+    override val diagnosticActionAway = "Recorded away"
+    override val diagnosticActionLeave = "Recorded leave"
+    override val diagnosticActionAwayReverted = "Leave reverted to away"
+    override val diagnosticReasonFreshArrive = "Office detected — recorded as arrive"
+    override val diagnosticReasonDayBoundary = "Auto-closed at day boundary"
+    override val diagnosticReasonAutoLeaveTimeout = "Auto-closed: away too long"
+    override val diagnosticReasonAutoLeaveWorkend = "Auto-closed: past work-end time"
+    override val diagnosticReasonThresholdMet = "Absence threshold reached"
+    override val diagnosticReasonReturnedSameDay = "Returned same day — leave reverted to away"
+    override val diagnosticReasonProvisionalMiss = "Single miss (pending)"
+    override val diagnosticReasonAwayStarted = "Miss persisted — away started"
+    override val diagnosticReasonResetCorruptState = "Reset corrupted state"
 
     override val policyTitle = "Lab operating policy"
     override val policyDocDesc = "Lab operating policy document"

@@ -363,7 +363,10 @@ fun RecordsTab(
     }
     fixingFlag?.let { flag ->
         EditEventDialog(
-            event = missingEventTemplate(flag, companySsid),
+            // remember-ed for the same reason as the blank-add template below: it now reads the
+            // clock too, so recomputing it inline would reset the user's in-progress edits on
+            // every recomposition (e.g. a background ARRIVE landing mid-entry).
+            event = remember(flag) { missingEventTemplate(flag, companySsid) },
             isNew = true,
             onSave = { created -> onAddEvent(created); fixingFlag = null },
             onDelete = null,
