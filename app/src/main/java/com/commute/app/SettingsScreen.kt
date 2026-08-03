@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.BeachAccess
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DeleteForever
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Router
@@ -309,19 +308,6 @@ fun SettingsScreen(
                             onSaveAm = viewModel::setHalfDayAmWindow,
                             onSavePm = viewModel::setHalfDayPmWindow
                         )
-                    }
-
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Text(s.policyDocCardTitle, style = MaterialTheme.typography.titleSmall)
-                            }
-                            Button(
-                                onClick = onOpenPolicyDocument,
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text(s.viewPolicy) }
-                        }
                     }
                 }
 

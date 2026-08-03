@@ -504,6 +504,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                         onUpdateEvent = viewModel::updateEvent,
                         onExcludeEvent = viewModel::excludeEvent,
                         onRestoreEvent = viewModel::restoreEvent,
+                        onDeleteEvents = viewModel::deleteEventsPermanently,
                         modifier = Modifier.weight(1f)
                     )
                     2 -> LeaveTab(

@@ -1,6 +1,7 @@
 package com.commute.app.data
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
@@ -26,6 +27,9 @@ interface CommuteDao {
 
     @Update
     suspend fun update(event: CommuteEvent)
+
+    @Delete
+    suspend fun delete(event: CommuteEvent)
 
     @Query("DELETE FROM commute_events")
     suspend fun deleteAll()

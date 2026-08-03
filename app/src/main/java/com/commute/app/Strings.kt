@@ -78,6 +78,10 @@ interface Strings {
     fun excludedRecordsButton(n: Int): String
     val excludedRecordsTitle: String
     val noExcludedRecords: String
+    /** Checkbox label toggling every row in [excludedRecordsTitle] selected/deselected at once. */
+    val selectAll: String
+    /** e.g. "선택 삭제 (3)" / "Delete selected (3)" — permanently deletes the checked rows. */
+    fun deleteSelectedButton(n: Int): String
 
     // --- event types (RF-detected) ---
     val eventArrive: String
@@ -398,6 +402,8 @@ object KoStrings : Strings {
     override fun excludedRecordsButton(n: Int) = "예외처리된 기록 ($n)"
     override val excludedRecordsTitle = "예외처리된 기록"
     override val noExcludedRecords = "예외처리된 기록이 없습니다"
+    override val selectAll = "전체 선택"
+    override fun deleteSelectedButton(n: Int) = "선택 삭제 ($n)"
     override val searching = "검색 중..."
 
     override val eventArrive = "출근"
@@ -682,6 +688,8 @@ object EnStrings : Strings {
     override fun excludedRecordsButton(n: Int) = "Excluded records ($n)"
     override val excludedRecordsTitle = "Excluded records"
     override val noExcludedRecords = "No excluded records"
+    override val selectAll = "Select all"
+    override fun deleteSelectedButton(n: Int) = "Delete selected ($n)"
     override val searching = "Searching..."
 
     override val eventArrive = "Clock in"

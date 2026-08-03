@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
@@ -31,10 +37,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +66,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.commute.app.data.CommuteEvent
@@ -255,6 +265,7 @@ fun RecordsTab(
     onUpdateEvent: (CommuteEvent) -> Unit,
     onExcludeEvent: (CommuteEvent) -> Unit,
     onRestoreEvent: (CommuteEvent) -> Unit,
+    onDeleteEvents: (List<CommuteEvent>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
@@ -379,27 +390,75 @@ fun RecordsTab(
             lunchStartMinute = lunchStartMinute,
             lunchEndMinute = lunchEndMinute,
             onRestore = onRestoreEvent,
+            onDelete = { onDeleteEvents(listOf(it)) },
+            onDeleteMany = onDeleteEvents,
             onDismiss = { showingExcluded = false }
         )
     }
 
 }
 
+/** Sizing for [ExcludedRecordsDialog]'s dense rows, named so the row's various `.size()`/`.padding()`
+ * calls read as one consistent scale instead of scattered magic numbers. */
+private val CompactCheckboxIconSize = 14.dp
+private val CompactCheckboxTouchPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+private val CompactRowActionButtonSize = 24.dp
+private val CompactRowActionIconSize = 16.dp
+private val CompactRowPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+private val CompactRowItemSpacing = 2.dp
+private val CompactRowLabelTimeGap = 10.dp
+
+/** A checkbox sized/margined by hand instead of Material3's [androidx.compose.material3.Checkbox],
+ * whose internal `requiredSize(20.dp)` ignores any outer size modifier — so callers that need a
+ * genuinely compact box (e.g. [ExcludedRecordsDialog]'s dense rows) can't shrink it via modifiers. */
+@Composable
+private fun SmallCheckbox(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Icon(
+        if (checked) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+        contentDescription = null,
+        tint = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .clickable { onCheckedChange(!checked) }
+            .padding(CompactCheckboxTouchPadding)
+            .size(CompactCheckboxIconSize)
+    )
+}
+
 /** Lists every record the user has excluded from 기록보기, newest first, each with a one-tap
- * restore — the counterpart to the exclude action in [EditEventDialog]. Closes itself once the
- * last one is restored rather than leaving an empty dialog open. */
+ * restore — the counterpart to the exclude action in [EditEventDialog] — and a permanent delete
+ * (tap-to-arm, tap again to confirm, same pattern as [HolidayEditDialog]/leave delete) for rows
+ * that are genuine duplicates (e.g. left behind by a backup restore) rather than something to
+ * bring back. A checkbox per row plus a "select all" toggle feed [onDeleteMany] so a pile of
+ * duplicates (the common case after a backup restore) can be cleared in one confirm instead of
+ * one tap-twice per row. Closes itself once the last one is gone rather than leaving an empty
+ * dialog open. */
 @Composable
 private fun ExcludedRecordsDialog(
     events: List<CommuteEvent>,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
     onRestore: (CommuteEvent) -> Unit,
+    onDelete: (CommuteEvent) -> Unit,
+    onDeleteMany: (List<CommuteEvent>) -> Unit,
     onDismiss: () -> Unit
 ) {
     val s = LocalStrings.current
+    var confirmingDeleteId by remember { mutableStateOf<Long?>(null) }
+    var confirmingDeleteSelected by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<Long>()) }
     LaunchedEffect(events.isEmpty()) {
         if (events.isEmpty()) onDismiss()
     }
+    // Selection can go stale once a restore/delete elsewhere drops an id out of `events`.
+    LaunchedEffect(events) {
+        val liveIds = events.map { it.id }.toSet()
+        if (selectedIds.any { it !in liveIds }) selectedIds = selectedIds.intersect(liveIds)
+    }
+    val sorted = events.sortedByDescending { it.timestamp }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text(s.close) } },
@@ -408,36 +467,104 @@ private fun ExcludedRecordsDialog(
             if (events.isEmpty()) {
                 Text(s.noExcludedRecords, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
+              CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    events.sortedByDescending { it.timestamp }.forEach { event ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SmallCheckbox(
+                                checked = selectedIds.isNotEmpty() && selectedIds.size == sorted.size,
+                                onCheckedChange = { checkAll ->
+                                    selectedIds = if (checkAll) sorted.map { it.id }.toSet() else emptySet()
+                                }
+                            )
+                            Text(s.selectAll, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        if (selectedIds.isNotEmpty()) {
+                            TextButton(onClick = {
+                                if (confirmingDeleteSelected) {
+                                    onDeleteMany(sorted.filter { it.id in selectedIds })
+                                    selectedIds = emptySet()
+                                    confirmingDeleteSelected = false
+                                } else {
+                                    confirmingDeleteSelected = true
+                                }
+                            }) {
+                                Text(
+                                    if (confirmingDeleteSelected) s.reallyDelete else s.deleteSelectedButton(selectedIds.size),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                    sorted.forEach { event ->
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    .padding(CompactRowPadding),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(CompactRowItemSpacing)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        when (event.type) {
-                                            CommuteEventType.ARRIVE -> s.eventArrive
-                                            CommuteEventType.LEAVE -> s.eventLeave
-                                            CommuteEventType.AWAY -> s.eventAway
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Text(
-                                        formatEventRangeText(event, lunchStartMinute, lunchEndMinute),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                SmallCheckbox(
+                                    checked = event.id in selectedIds,
+                                    onCheckedChange = { checked ->
+                                        selectedIds = if (checked) selectedIds + event.id else selectedIds - event.id
+                                    }
+                                )
+                                Text(
+                                    when (event.type) {
+                                        CommuteEventType.ARRIVE -> s.eventArrive
+                                        CommuteEventType.LEAVE -> s.eventLeave
+                                        CommuteEventType.AWAY -> s.eventAway
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(CompactRowLabelTimeGap))
+                                Text(
+                                    formatEventRangeText(event, lunchStartMinute, lunchEndMinute),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { onRestore(event) },
+                                    modifier = Modifier.size(CompactRowActionButtonSize)
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Restore,
+                                        contentDescription = s.restoreAction,
+                                        modifier = Modifier.size(CompactRowActionIconSize)
                                     )
                                 }
-                                TextButton(onClick = { onRestore(event) }) { Text(s.restoreAction) }
+                                IconButton(
+                                    onClick = {
+                                        if (confirmingDeleteId == event.id) {
+                                            onDelete(event)
+                                            confirmingDeleteId = null
+                                        } else {
+                                            confirmingDeleteId = event.id
+                                        }
+                                    },
+                                    modifier = Modifier.size(CompactRowActionButtonSize)
+                                ) {
+                                    Icon(
+                                        if (confirmingDeleteId == event.id) Icons.Filled.DeleteForever else Icons.Filled.Delete,
+                                        contentDescription = if (confirmingDeleteId == event.id) s.reallyDelete else s.delete,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(CompactRowActionIconSize)
+                                    )
+                                }
                             }
                         }
                     }
                 }
+              }
             }
         }
     )

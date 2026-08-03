@@ -487,6 +487,29 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     /** Brings a record back into 기록보기 and every total computed from it. */
     fun restoreEvent(event: CommuteEvent) = setExcluded(event, false)
 
+    /** Permanently removes a record — unlike [excludeEvent], unrecoverable. For rows [excludeEvent]
+     * alone can't clean up, e.g. a true duplicate left behind by a backup restore: excluding it
+     * would keep it sitting in [excludedEvents] forever, and since the recovery journal matches by
+     * type+timestamp, leaving its journal line behind risks a later [recoverFromJournal]
+     * resurrecting it. Also drops it from the journal so it stays gone. */
+    fun deleteEventPermanently(event: CommuteEvent) {
+        viewModelScope.launch {
+            dao.delete(event)
+            recoveryJournal.remove(event)
+        }
+    }
+
+    /** Bulk form of [deleteEventPermanently], for clearing many excluded duplicates at once
+     * instead of tapping through them one by one. */
+    fun deleteEventsPermanently(events: List<CommuteEvent>) {
+        viewModelScope.launch {
+            events.forEach { event ->
+                dao.delete(event)
+                recoveryJournal.remove(event)
+            }
+        }
+    }
+
     private fun setExcluded(event: CommuteEvent, excluded: Boolean) {
         viewModelScope.launch {
             val updated = event.copy(excluded = excluded)

@@ -24,7 +24,7 @@ android {
     buildToolsVersion = "36.0.0"
 
     defaultConfig {
-        applicationId = "com.commute.app"
+        applicationId = "com.commute.tyranno"
         minSdk = 24
         targetSdk = 36
         versionCode = 7
