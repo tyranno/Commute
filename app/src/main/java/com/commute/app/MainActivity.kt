@@ -257,39 +257,51 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
     // background — which Android 12+ rejects outright and 14+ rejects for a while-in-use service
     // type, crashing the app precisely when the watchdog was supposed to save it. Suspending
     // while invisible also drops the pointless background binder traffic.
-    LaunchedEffect(hasLocationPermission, companyNetworks, bleEnabled, companyBeaconIds, lunchStartMinute, lunchEndMinute) {
+    // Keyed on monitoringEnabled too: flipping the toggle restarts this effect, so turning
+    // monitoring back on scans immediately instead of waiting up to 60s for the next tick.
+    LaunchedEffect(hasLocationPermission, monitoringEnabled, companyNetworks, bleEnabled, companyBeaconIds, lunchStartMinute, lunchEndMinute) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 nowTick = System.currentTimeMillis()
-                currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
-                val wifiDetection = if (hasLocationPermission) detectCompanyNetworks(context, companyNetworks) else null
-                companyWifiDetectedNow = wifiDetection?.nearby == true
-                detectedCompanySsid = wifiDetection?.matchedSsid
-                // BLE presence mirrors the Wi-Fi live poll, gated on at least one beacon being
-                // registered and BLE being enabled. detectCompanyBeacons() is a bounded (~6s)
-                // active scan that already returns "not nearby" when the permission is missing or
-                // Bluetooth is off, so no extra guard is needed beyond skipping it entirely when
-                // BLE isn't in use. This is the same OR-with-Wi-Fi presence the background service
-                // records via mergePresence, so the card agrees with the service even when only a
-                // beacon can see the office.
-                companyBeaconDetectedNow = if (bleEnabled && companyBeaconIds.isNotEmpty() &&
-                    hasBleScanPermission(context)) {
-                    detectCompanyBeacons(context, companyBeaconIds).nearby
+                // While monitoring is off the background service records nothing, so scanning here
+                // too would just burn battery for a status card nobody is relying on — clear it to
+                // an idle state instead of polling Wi-Fi/BLE.
+                if (monitoringEnabled) {
+                    currentSsid = if (hasLocationPermission) currentWifiSsid(context) else null
+                    val wifiDetection = if (hasLocationPermission) detectCompanyNetworks(context, companyNetworks) else null
+                    companyWifiDetectedNow = wifiDetection?.nearby == true
+                    detectedCompanySsid = wifiDetection?.matchedSsid
+                    // BLE presence mirrors the Wi-Fi live poll, gated on at least one beacon being
+                    // registered and BLE being enabled. detectCompanyBeacons() is a bounded (~6s)
+                    // active scan that already returns "not nearby" when the permission is missing or
+                    // Bluetooth is off, so no extra guard is needed beyond skipping it entirely when
+                    // BLE isn't in use. This is the same OR-with-Wi-Fi presence the background service
+                    // records via mergePresence, so the card agrees with the service even when only a
+                    // beacon can see the office.
+                    companyBeaconDetectedNow = if (bleEnabled && companyBeaconIds.isNotEmpty() &&
+                        hasBleScanPermission(context)) {
+                        detectCompanyBeacons(context, companyBeaconIds).nearby
+                    } else {
+                        false
+                    }
+                    // Watchdog: the OS (Samsung's background app management in particular) can kill
+                    // the foreground WifiMonitorService outside of a reboot, and nothing else
+                    // restarts it — BootReceiver only fires on ACTUAL reboot. Re-issuing start() is a
+                    // no-op when the service is already alive, so this just revives it the moment the
+                    // user opens the app. Only legal while we're actually foreground, hence the gate.
+                    if (hasLocationPermission) {
+                        WifiMonitorService.start(context)
+                    }
                 } else {
-                    false
+                    currentSsid = null
+                    companyWifiDetectedNow = false
+                    detectedCompanySsid = null
+                    companyBeaconDetectedNow = false
                 }
                 locationServicesEnabled = locationManager == null ||
                     LocationManagerCompat.isLocationEnabled(locationManager)
                 isLunchTimeNow = isWithinMinuteOfDayWindow(nowTick, lunchStartMinute, lunchEndMinute)
-                // Watchdog: the OS (Samsung's background app management in particular) can kill
-                // the foreground WifiMonitorService outside of a reboot, and nothing else
-                // restarts it — BootReceiver only fires on ACTUAL reboot. Re-issuing start() is a
-                // no-op when the service is already alive, so this just revives it the moment the
-                // user opens the app. Only legal while we're actually foreground, hence the gate.
-                if (monitoringEnabled && hasLocationPermission) {
-                    WifiMonitorService.start(context)
-                }
                 delay(60_000)
             }
         }
