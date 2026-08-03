@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 and below (android:fullBackupContent). Commute records are a log of where a person was
+  and when, so none of it goes to Google's cloud backup: what leaves the device should be the user's
+  explicit choice through 설정 > 백업, which writes a file they pick and control.
+
+  Excluding the DB also stops a device restore from resurrecting records the user permanently
+  deleted, which the in-app recovery journal is already the deliberate, local safety net for.
+
+  Settings (Wi-Fi/beacon registrations, work rules, language) are excluded too — they name the
+  user's workplace network, which is the same kind of location signal as the records themselves.
+-->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>

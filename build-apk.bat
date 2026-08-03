@@ -9,10 +9,12 @@ set JAVA_HOME=C:\Program Files\Android\openjdk\jdk-21.0.8
 set ANDROID_HOME=C:\Program Files (x86)\Android\android-sdk
 set ANDROID_SDK_ROOT=%ANDROID_HOME%
 
-echo [1/1] gradle assembleDebug ...
-call .\gradlew.bat assembleDebug --no-daemon || goto :err
+REM The github flavor is the day-to-day one: same app plus the self-updater. Use build-release.bat
+REM for the Play bundle.
+echo [1/1] gradle assembleGithubDebug ...
+call .\gradlew.bat assembleGithubDebug --no-daemon || goto :err
 
-set APK=app\build\outputs\apk\debug\app-debug.apk
+set APK=app\build\outputs\apk\github\debug\app-github-debug.apk
 echo.
 echo BUILD COMPLETE: %APK%
 echo.
@@ -23,7 +25,7 @@ if not errorlevel 1 (
     adb install -r "%APK%"
     if errorlevel 1 (
         echo Install failed - signature mismatch. Run:
-        echo   adb uninstall com.commute.app
+        echo   adb uninstall com.commute.tyranno
         echo   adb install "%APK%"
     ) else (
         echo Install OK.

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  github flavor only — the build published as a plain APK on GitHub Releases, which has no store to
+  deliver updates and so ships its own updater.
+
+  Google Play's Device and Network Abuse policy forbids an app distributed through Play from
+  updating or replacing itself by any route other than Play, so REQUEST_INSTALL_PACKAGES and the
+  installer's FileProvider are declared here rather than in src/main. The play flavor therefore has
+  no permission to install a package and no provider to hand one to the system installer — it is
+  incapable of self-updating, not merely configured not to.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Lets the app launch the system package installer for the APK it downloaded (the user still
+         has to grant "install unknown apps" for this app once, via Settings). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application>
+        <!-- Exposes the downloaded update APK (in cacheDir) to the system package installer as a
+             content:// Uri — required on Android 7+, which rejects file:// Uris across apps. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

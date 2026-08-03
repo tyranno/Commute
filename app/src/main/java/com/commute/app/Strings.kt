@@ -423,7 +423,13 @@ object KoStrings : Strings {
 
     override val settingsTitle = "근무 규칙 설정"
     override val locationPermTitle = "위치 권한 필요"
-    override val locationPermMessage = "와이파이 이름을 읽고 출퇴근을 감지하려면 위치 권한이 필요합니다."
+    // Play's location policy wants the disclosure to say what is collected, what it is used for,
+    // and that it keeps happening in the background — before the system prompt, not after.
+    override val locationPermMessage =
+        "안드로이드는 주변 와이파이 이름(SSID)과 블루투스 신호를 읽는 것을 위치 정보로 분류합니다. " +
+            "이 앱은 등록하신 회사 와이파이·비콘이 주변에 있는지 확인해 출퇴근 시각을 자동으로 기록하며, " +
+            "감시를 켜 두면 앱을 닫은 뒤에도 백그라운드 서비스가 주기적으로 이 확인을 계속합니다. " +
+            "GPS 좌표는 수집하지 않고, 기록은 기기 안에만 저장되며 외부로 전송되지 않습니다."
     override val grantPermission = "권한 허용"
     override val locationOffTitle = "위치 서비스 꺼짐"
     override val locationOffMessage = "위치 권한은 허용되어 있지만 기기의 위치 서비스(GPS)가 꺼져 있어 와이파이 이름을 읽을 수 없습니다. 설정에서 위치 서비스를 켜주세요."
@@ -709,7 +715,13 @@ object EnStrings : Strings {
 
     override val settingsTitle = "Settings"
     override val locationPermTitle = "Location permission required"
-    override val locationPermMessage = "Location permission is needed to read the Wi-Fi name and detect your commute."
+    override val locationPermMessage =
+        "Android classifies reading nearby Wi-Fi names (SSIDs) and Bluetooth signals as location " +
+            "access. This app checks whether the office Wi-Fi or beacon you registered is nearby " +
+            "so it can record your clock-in and clock-out times automatically, and while " +
+            "monitoring is on a background service keeps making that check after you close the " +
+            "app. It does not collect GPS coordinates, and records stay on this device — nothing " +
+            "is sent anywhere."
     override val grantPermission = "Grant permission"
     override val locationOffTitle = "Location services off"
     override val locationOffMessage = "Location permission is granted, but the device's location service (GPS) is off, so the Wi-Fi name can't be read. Turn on location services in Settings."

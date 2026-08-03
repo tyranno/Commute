@@ -1,0 +1,6 @@
+<resources>
+    <!-- The launch window's background, shown for the instant before Compose draws. Matches
+         Material 3's light `surface` so the hand-off is invisible; values-night/ has the dark
+         counterpart. -->
+    <color name="window_background">#FFFBFE</color>
+</resources>

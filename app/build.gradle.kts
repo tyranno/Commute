@@ -33,6 +33,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Same app, two distribution channels, and they cannot share one binary. Google Play's Device
+    // and Network Abuse policy forbids an app distributed through Play from updating itself by any
+    // route other than Play, while the APK published on GitHub Releases has no store to update it
+    // and so needs a built-in updater. Splitting by flavor keeps the updater — and the
+    // REQUEST_INSTALL_PACKAGES permission it needs — out of the Play build entirely rather than
+    // merely hidden behind a flag. See app/src/{github,play}/java/.../update/UpdateActions.kt.
+    //
+    // Both flavors keep the same applicationId and signing key, so either can upgrade the other
+    // in place on a device.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+        }
+        create("play") {
+            dimension = "distribution"
+        }
+    }
+
     signingConfigs {
         if (keystorePropertiesFile.exists()) {
             create("release") {
@@ -46,7 +65,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 on for release: strips unused library code (Compose and material-icons-extended
+            // are most of the ~12MB), and in the play flavor it also removes the update code paths
+            // that UPDATER_ENABLED = false makes unreachable. Verify a release build on a device
+            // before publishing — shrinking is the one setting that can break only at runtime.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

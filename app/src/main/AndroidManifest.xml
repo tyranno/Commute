@@ -4,12 +4,11 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <!-- In-app updater: fetches the latest GitHub release and offers to install it, since this
-         build isn't distributed through Play. INTERNET for the release check/download;
-         REQUEST_INSTALL_PACKAGES so the system installer can be launched for the downloaded APK
-         (the user still has to grant "install unknown apps" for this app once, via Settings). -->
+    <!-- Holiday sync (public holiday API) and, in the github flavor, the update check/download.
+         REQUEST_INSTALL_PACKAGES and the installer FileProvider live in src/github/ alone: Play
+         forbids an app it distributes from installing anything itself, so the play flavor must not
+         merely hide that feature but be incapable of it. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
@@ -29,6 +28,8 @@
 
     <application
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -58,17 +59,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Exposes the downloaded update APK (in cacheDir) to the system package installer as a
-             content:// Uri — required on Android 7+, which rejects file:// Uris across apps. -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
     </application>
 
 </manifest>

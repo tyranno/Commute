@@ -1,0 +1,7 @@
+<resources>
+    <!-- Dark counterpart of values/themes.xml, so the launch window is dark before Compose draws
+         instead of flashing white. Same style name; the system picks this one in dark mode. -->
+    <style name="Theme.Commute" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

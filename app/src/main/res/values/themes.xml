@@ -1,3 +1,15 @@
 <resources>
-    <style name="Theme.Commute" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      The Compose UI already follows the system via isSystemInDarkTheme(), but the *window* behind
+      it comes from this theme. With only a Light theme declared, a phone in dark mode showed a
+      white window for the moment between launch and Compose's first frame — a white flash on every
+      cold start, which reads as a bug.
+
+      The platform has no Theme.Material.DayNight (that parent is AppCompat's), so the light/dark
+      split is done the resource-qualifier way instead: this file is the light theme, and
+      values-night/themes.xml declares the dark one under the same name.
+    -->
+    <style name="Theme.Commute" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

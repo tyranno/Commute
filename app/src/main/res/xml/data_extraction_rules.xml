@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (android:dataExtractionRules). Same reasoning as backup_rules.xml: a commute log is a
+  record of where a person was and when, so it is excluded from both routes off the device.
+
+  cloud-backup  — Google Drive auto backup.
+  device-transfer — direct phone-to-phone transfer during setup.
+
+  Device transfer excludes the same data rather than allowing it: the user's own 설정 > 백업 file
+  moves history to a new phone deliberately, and that keeps one path to reason about instead of two.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>

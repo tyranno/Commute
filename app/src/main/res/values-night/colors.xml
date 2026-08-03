@@ -1,0 +1,5 @@
+<resources>
+    <!-- Dark counterpart of the launch window background — Material 3's dark `surface`, so a phone
+         in dark mode no longer flashes white between launch and Compose's first frame. -->
+    <color name="window_background">#1C1B1F</color>
+</resources>

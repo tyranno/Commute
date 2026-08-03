@@ -76,6 +76,7 @@ import com.commute.app.ble.isBluetoothOn
 import com.commute.app.ble.requiredBleScanPermissions
 import com.commute.app.ble.scanNearbyBeacons
 import com.commute.app.data.formatMinuteOfDayToHHmm
+import com.commute.app.update.UPDATER_ENABLED
 import com.commute.app.update.UpdateStatus
 import com.commute.app.update.canRequestInstallPackages
 import com.commute.app.update.currentAppVersionName
@@ -398,6 +399,10 @@ fun SettingsScreen(
                         }
                     }
 
+                    // The Play build updates through Play and has no updater of its own, so it shows
+                    // the version on its own rather than a card whose only control is a dead
+                    // "확인" button. See update/UpdateActions.kt for why the capability is
+                    // flavor-specific rather than merely hidden.
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -409,7 +414,9 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            UpdateStatusSection(status = updateStatus, viewModel = viewModel)
+                            if (UPDATER_ENABLED) {
+                                UpdateStatusSection(status = updateStatus, viewModel = viewModel)
+                            }
                         }
                     }
 
