@@ -12,6 +12,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -25,22 +26,82 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/**
+ * Role assignments, so the mapping is in one place instead of inferred from call sites:
+ *
+ * - `primary`   근무 (verdigris) — the weekly bar's fill, 출근, the working status card
+ * - `secondary` 연차·외출·퇴근 (slate) — declared, deliberate, cool and quiet
+ * - `tertiary`  초과근무·이석 (brass) — warm, meaning "more than planned"
+ * - `error`     휴일·오류 (oxide)
+ *
+ * 점심 is deliberately *not* a scheme role: it's the chart's grey gap and lives in [ExcludedLight]
+ * / [ExcludedDark]. It used to borrow `tertiary`, which collided with the 이석 status card — one
+ * role trying to be both "a gap that doesn't count" and "something warm to look at".
+ */
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = CobaltBright,
+    onPrimary = Color(0xFF00214D),
+    primaryContainer = CobaltContainerDark,
+    onPrimaryContainer = Color(0xFFD6E3FF),
+    secondary = SteelBright,
+    onSecondary = Color(0xFF1A2537),
+    secondaryContainer = SteelContainerDark,
+    onSecondaryContainer = Color(0xFFD5DEF0),
+    tertiary = GoldBright,
+    onTertiary = Color(0xFF3B2A00),
+    tertiaryContainer = GoldContainerDark,
+    onTertiaryContainer = Color(0xFFFFE7A3),
+    error = EmberBright,
+    onError = Color(0xFF4E1508),
+    errorContainer = EmberContainerDark,
+    onErrorContainer = Color(0xFFFFDAD3),
+    background = Midnight,
+    onBackground = PaperOnDark,
+    surface = Midnight,
+    onSurface = PaperOnDark,
+    surfaceVariant = MidnightVariant,
+    onSurfaceVariant = Color(0xFFC3C9D4),
+    outline = Color(0xFF78808F),
+    outlineVariant = Color(0xFF333B47)
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
+    primary = Cobalt,
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = CobaltContainer,
+    onPrimaryContainer = Color(0xFF001849),
+    secondary = Steel,
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = SteelContainer,
+    onSecondaryContainer = Color(0xFF0D1930),
+    tertiary = Gold,
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = GoldContainer,
+    onTertiaryContainer = Color(0xFF2A1800),
+    error = Ember,
+    onError = Color(0xFFFFFFFF),
+    errorContainer = EmberContainer,
+    onErrorContainer = Color(0xFF410002),
+    background = Paper,
+    onBackground = InkOnPaper,
+    surface = Paper,
+    onSurface = InkOnPaper,
+    surfaceVariant = PaperVariant,
+    onSurfaceVariant = Color(0xFF434A57),
+    outline = Color(0xFF737B88),
+    outlineVariant = Color(0xFFC3C7D2)
 )
 
+/**
+ * @param dynamicColor off by default. Material You would repaint the whole app from the user's
+ * wallpaper, which meant Commute had no colour of its own — every device showed a different app,
+ * and none of them matched the Play Store screenshots. Worse for this app than for most: 근무 /
+ * 초과 / 이석 are told apart by hue, and wallpaper-derived hues don't guarantee that separation.
+ */
 @Composable
 fun CommuteTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

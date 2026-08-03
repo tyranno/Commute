@@ -57,6 +57,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -69,6 +70,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.commute.app.ui.theme.ExcludedDark
+import com.commute.app.ui.theme.ExcludedLight
 import com.commute.app.data.CommuteEvent
 import com.commute.app.data.CommuteEventType
 import com.commute.app.data.absentMinuteSpans
@@ -689,14 +692,17 @@ private fun WeeklyRangeChart(
     val leavesByDay = leaves.groupBy { startOfDay(it.date) }
     val holidaysByDay = holidays.associateBy { startOfDay(it.date) }
     val eventsByDay = events.groupBy { startOfDay(it.timestamp) }
-    val barColor = MaterialTheme.colorScheme.primary
-    val lunchColor = MaterialTheme.colorScheme.tertiary
-    val leaveColor = MaterialTheme.colorScheme.secondary
-    val holidayColor = MaterialTheme.colorScheme.error
-    // Warm amber for the 8시간 초과 portion of a bar — a fixed hue (not a theme role) so it reads
-    // clearly as "초과근무" and stays distinct from the blue bar, the lighter-blue lunch band, and
-    // the secondary-toned leave blocks in both light and dark themes.
-    val overtimeColor = Color(0xFFFFA726)
+    // The bar is read as one rule: cool is normal, warm is more-than-planned, grey doesn't count.
+    val barColor = MaterialTheme.colorScheme.primary          // 근무 — 청록
+    val leaveColor = MaterialTheme.colorScheme.secondary      // 연차·외출 — 슬레이트
+    val holidayColor = MaterialTheme.colorScheme.error        // 휴일 — 산화
+    val overtimeColor = MaterialTheme.colorScheme.tertiary    // 초과근무 — 황동
+    // 점심 is the one grey in the chart: time that passed and doesn't count. Fixed rather than a
+    // scheme role because it has to hold the same weight on both surfaces, and because it used to
+    // borrow `tertiary` — the same role the 이석 status card uses, which now belongs to 황동 alone.
+    // Picked off the surface actually being drawn, not isSystemInDarkTheme(): the app has its own
+    // 화면 테마 setting, so the device's mode and the rendered one are no longer the same question.
+    val lunchColor = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) ExcludedDark else ExcludedLight
     val axisColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val density = LocalDensity.current
@@ -1091,10 +1097,13 @@ private fun EventRow(
     onClick: () -> Unit = {}
 ) {
     val s = LocalStrings.current
+    // Same rule as the bar: 출근 is the working colour, 퇴근 is declared and quiet, 이석 is warm.
+    // These were a hardcoded green/red/amber, which read as pass/fail — 퇴근 is not a failure, and
+    // the app makes no judgement about either end of the day.
     val (icon, label, tint) = when (event.type) {
-        CommuteEventType.ARRIVE -> Triple(Icons.Filled.Work, s.eventArrive, Color(0xFF2E7D32))
-        CommuteEventType.LEAVE -> Triple(Icons.AutoMirrored.Filled.ExitToApp, s.eventLeave, Color(0xFFC62828))
-        CommuteEventType.AWAY -> Triple(Icons.AutoMirrored.Filled.DirectionsWalk, s.eventAway, Color(0xFFF9A825))
+        CommuteEventType.ARRIVE -> Triple(Icons.Filled.Work, s.eventArrive, MaterialTheme.colorScheme.primary)
+        CommuteEventType.LEAVE -> Triple(Icons.AutoMirrored.Filled.ExitToApp, s.eventLeave, MaterialTheme.colorScheme.secondary)
+        CommuteEventType.AWAY -> Triple(Icons.AutoMirrored.Filled.DirectionsWalk, s.eventAway, MaterialTheme.colorScheme.tertiary)
     }
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
