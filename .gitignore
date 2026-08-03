@@ -14,3 +14,25 @@ app/build
 /keystore.properties
 app/*.jks
 app/*.keystore
+
+# Build output — APKs are rebuilt from tags, never committed
+/dist/
+/.kotlin/
+
+# Agent / plugin scratch dirs (device pulls, session state) — device pulls
+# contain real commute records, so they must stay out of this public repo
+/.aglink/
+/.bkit/
+/.teleclaude/
+
+# Internal company document, not for a public repo
+/doc/가산 연구소 운영 방안_0923 (1).pdf
+
+# .NET beacon test tool build output
+/doc/ble-beacon/bin/
+/doc/ble-beacon/obj/
+/doc/ble-beacon/*.log
+/doc/ble-beacon/out.txt
+
+# Compiled helper classes (sources are committed, output is not)
+*.class

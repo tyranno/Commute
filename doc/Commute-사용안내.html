@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Commute 사용 안내</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+</style>
+  <style type="text/css">body{font-family:'Malgun Gothic','맑은 고딕',system-ui,sans-serif;max-width:820px;margin:2rem auto;padding:0 1.2rem;line-height:1.7;color:#1a1a1a}
+h1{border-bottom:3px solid #3b6ef0;padding-bottom:.3rem}
+h2{margin-top:2rem;border-bottom:1px solid #ddd;padding-bottom:.2rem}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+th,td{border:1px solid #ccc;padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:#f0f4ff}
+blockquote{border-left:4px solid #ffb020;background:#fff8ec;margin:1rem 0;padding:.6rem 1rem;color:#663}
+code{background:#f2f2f2;padding:.1rem .3rem;border-radius:3px}
+</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Commute 사용 안내</h1>
+</header>
+<h1 id="commute-출퇴근-자동-기록-앱-사용-안내">Commute — 출퇴근 자동
+기록 앱 사용 안내</h1>
+<p>버전 0.1.0 · Android 7.0(API 24) 이상</p>
+<hr />
+<h2 id="먼저-꼭-읽어주세요-이-앱의-시간은-대략값입니다">⚠️ 먼저 꼭
+읽어주세요 — 이 앱의 시간은 “대략값”입니다</h2>
+<p>이 앱은 <strong>출입 게이트를 찍는 방식이 아니라, 회사 Wi-Fi(AP) 또는
+사무실 비콘(BLE) 신호가 잡히는 “영역 안에 있는지”로 출근/퇴근을
+추정</strong>합니다. 그래서 앱이 기록하는 시각은 <strong>실제 출입
+시각과 차이가 날 수 있습니다.</strong></p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>오차 원인</th>
+<th>무슨 일이 생기나</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>감지 주기(약 1분)</strong></td>
+<td>신호를 1분에 한 번 확인합니다. 실제로 자리를 뜬 시각과 최대 1분
+차이가 납니다.</td>
+</tr>
+<tr>
+<td><strong>신호 꼬리(tail)</strong></td>
+<td>책상을 떠나 짐을 싸고 복도·엘리베이터로 이동하는 동안에도 신호가
+잡혀, <strong>퇴근이 실제보다 늦게</strong> 찍힐 수 있습니다.</td>
+</tr>
+<tr>
+<td><strong>신호 세기·간섭</strong></td>
+<td>벽·사람·기기 위치에 따라 신호가 잠깐 끊기거나 늦게 잡혀, 출근이
+늦게/퇴근이 이르게 찍힐 수 있습니다.</td>
+</tr>
+<tr>
+<td><strong>절전(Doze)·재부팅</strong></td>
+<td>밤사이 화면을 오래 끄거나 폰이 꺼지면 자동 퇴근 처리가 지연될 수
+있습니다.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>따라서 이 앱의 기록은 참고용 근태 보조 자료이며, 공식
+근태·급여 산정 기준으로 그대로 쓰기에는 부적합할 수 있습니다.</strong>
+실제와 다르면 아래 <a href="#5-기록-수정연차반차외출">기록 수정</a>
+방법으로 직접 고쳐서 쓰세요. 정확한 퇴근 시각이 필요하면, 자리를 뜰 때
+<strong>“퇴근 마진”</strong>(설정 → 근무 규칙)을 활용해 꼬리 오차를 몇
+분 앞당길 수 있습니다.</p>
+<hr />
+<h2 id="설치">1. 설치</h2>
+<ol type="1">
+<li>배포받은 <strong><code>Commute-0.1.0.apk</code></strong> 파일을
+폰으로 옮깁니다(메신저/메일/USB 등).</li>
+<li>파일을 탭해 설치합니다.</li>
+<li>“이 출처의 앱 설치” 차단 안내가 뜨면 → <strong>설정에서 해당 앱(파일
+관리자/브라우저)에 “이 출처 허용”을 켠 뒤</strong> 다시 설치하세요.</li>
+<li>설치 후 첫 실행 시 아래 권한들을 <strong>모두 허용</strong>해야 자동
+감지가 동작합니다.</li>
+</ol>
+<blockquote>
+<p>이미 설치돼 있고 업데이트만 하는 경우에도 같은 APK를 그대로 설치하면
+됩니다. <strong>기존 출퇴근 기록은 유지됩니다.</strong>(단, 서명이 다른
+APK로 덮어쓰면 재설치가 필요하니, 항상 같은 배포처의 APK를 쓰세요.)</p>
+</blockquote>
+<hr />
+<h2 id="최초-설정-한-번만">2. 최초 설정 (한 번만)</h2>
+<h3 id="권한-허용">2-1. 권한 허용</h3>
+<p>앱이 백그라운드에서 신호를 확인하려면 다음 권한이 필요합니다.</p>
+<ul>
+<li><strong>위치 — “항상 허용”</strong> : Wi-Fi/비콘 스캔에 안드로이드가
+위치 권한을 요구합니다. 꼭 <strong>“앱 사용 중에만”이 아니라 “항상
+허용”</strong> 으로 설정해야 백그라운드 감지가 됩니다.</li>
+<li><strong>주변 기기(블루투스)</strong> : 사무실 BLE 비콘을 감지할 때
+사용합니다.</li>
+<li><strong>알림</strong> : 근무 감지가 켜져 있음을 알리는 상단
+알림(상시 표시)입니다.</li>
+<li><strong>배터리 최적화 제외</strong> : 폰이 앱을 절전으로 잠재우지
+않도록, 요청이 뜨면 허용하세요. (설정 → 배터리 → 앱별 관리에서 Commute를
+“제한 없음”으로 두는 것을 권장)</li>
+</ul>
+<h3 id="회사-감지-대상-등록-설정-감지-탭">2-2. 회사 감지 대상 등록 (설정
+→ <strong>감지</strong> 탭)</h3>
+<p>오른쪽 위 <strong>톱니바퀴(⚙)</strong> → <strong>감지</strong> 탭에서
+하나 이상 등록합니다.</p>
+<ul>
+<li><strong>회사 Wi-Fi(AP) 등록</strong> : 사무실에서 잡히는 회사
+공유기를 골라 등록합니다. 실제로 그 Wi-Fi에 <strong>연결돼 있지 않아도,
+신호가 스캔되면</strong> 근무중으로 봅니다.</li>
+<li><strong>회사 비콘(BLE) 병행 감지</strong> (선택) : 사무실에 설치된
+검출용 비콘이 있으면 “주변 비콘 검색”으로 찾아 등록합니다. Wi-Fi가 안
+잡힐 때 비콘으로 보완합니다. (둘 중 <strong>하나라도 잡히면
+근무중</strong>으로 판정합니다.)</li>
+</ul>
+<blockquote>
+<p>비콘은 <strong>감지 전용</strong>입니다. 앱이 비콘을 켜거나 끄는 등
+제어하지 않습니다.</p>
+</blockquote>
+<hr />
+<h2 id="홈-화면-보는-법">3. 홈 화면 보는 법</h2>
+<p>상단 카드에 현재 상태가 표시됩니다.</p>
+<ul>
+<li><strong>근무중 / 자리 비움 / 퇴근</strong> : 지금 신호가 잡히는지에
+따라 바뀝니다.</li>
+<li><strong>회사 와이파이 / 회사 비콘</strong> : 어떤 신호로 감지
+중인지, 블루투스·Wi-Fi 아이콘으로 표시.</li>
+<li>맨 오른쪽 <strong>토글</strong> : 자동 감지 켜기/끄기.</li>
+</ul>
+<p>아래 탭은 <strong>현황 / 기록 / 연차·외출</strong> 3개입니다.</p>
+<h3 id="현황-탭">현황 탭</h3>
+<ul>
+<li><strong>오늘 근무시간</strong> : 오늘 인정된 순근무 시간(점심 제외).
+탭하면 “점심 포함”으로 잠깐 토글됩니다.</li>
+<li><strong>이번주 총 근무시간</strong> : 이번 주(월~일) 합계.
+<strong>탭하면 “이번주 초과근무(±)”</strong> 로 약 10초간 바뀌었다가
+자동 복귀합니다(다시 탭하면 즉시 복귀).
+<ul>
+<li>초과근무 = 그 주 <strong>기록이 있는 날만</strong> Σ(그날 인정시간 −
+8시간). <strong>오늘(진행 중인 날)은 제외</strong>됩니다.</li>
+</ul></li>
+<li><strong>이번주 출퇴근 시간 그래프</strong> : 날짜별 출근~퇴근 막대.
+<ul>
+<li>파란 막대 = 근무 시간대, 연한 밴드 = 점심시간,</li>
+<li><strong>막대 상단 앰버(주황)</strong> = 그날 8시간을 초과한
+구간,</li>
+<li><strong>점선 테두리의 빈 막대</strong> = 연차/반차/외출(시간대에
+맞춰 표시).</li>
+<li>막대를 탭하면 그날 상세(출근/퇴근/인정시간)가 뜹니다.</li>
+</ul></li>
+</ul>
+<h3 id="기록-탭">기록 탭</h3>
+<ul>
+<li>과거 출퇴근 기록 목록. 상단 <strong>칩(이번주 / 최근 2주 / 이번달 /
+최근 3개월 / 최근 6개월 / 전체)</strong> 으로 기간을 한 번에
+고릅니다.</li>
+<li>각 기록을 탭하면 출근/퇴근 시각을 <strong>직접 수정</strong>할 수
+있습니다(오차 교정용).</li>
+</ul>
+<hr />
+<h2 id="연차-반차-외출-관리-연차외출-탭">4. 연차 · 반차 · 외출 관리
+(연차·외출 탭)</h2>
+<p>오른쪽 아래 <strong>+ 버튼</strong> 으로 추가합니다.</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>종류</th>
+<th>인정 시간</th>
+<th>비고</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>연차</strong></td>
+<td>하루 8시간(480분) 인정</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>오전 반차</strong></td>
+<td>4시간(240분) 인정</td>
+<td>기본 09:00~13:00 (설정에서 조정)</td>
+</tr>
+<tr>
+<td><strong>오후 반차</strong></td>
+<td>4시간(240분) 인정</td>
+<td>기본 14:00~18:00 (설정에서 조정)</td>
+</tr>
+<tr>
+<td><strong>외출</strong></td>
+<td>(종료−시작) − 겹치는 점심 시간</td>
+<td>시작/종료 시각을 직접 입력</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>등록한 연차/반차/외출은 <strong>총 근무시간·초과근무 계산에 자동
+반영</strong>되고, 홈 그래프에 시간대에 맞춰 빈 막대로 표시됩니다.</li>
+<li>반차/연차는 정의상 이미 점심을 뺀 순근무 기준이라 별도 점심 차감이
+없습니다. 외출만 점심시간과 겹치는 만큼 자동으로 빼줍니다.</li>
+</ul>
+<blockquote>
+<p>연구소 운영방안에 연차/반차/외출 시각 규정이 별도로 없어, 일반 관행값
+(오전 09~13 / 오후 14~18)을 기본으로 넣었습니다. 실제 규정이 다르면 설정
+→ 근무 규칙 → “반차 시간대”에서 바꾸세요.</p>
+</blockquote>
+<hr />
+<h2 id="기록-수정연차반차외출">5. 기록 수정(연차·반차·외출)</h2>
+<p>앱 시간이 실제와 다를 때:</p>
+<ol type="1">
+<li><strong>기록 탭</strong> → 해당 날짜의 출근/퇴근 기록을 탭 → 시각
+수정 → 저장.</li>
+<li>하루 종일/반나절 부재는 <strong>연차·외출 탭</strong>에서
+연차·반차·외출로 등록.</li>
+</ol>
+<p>수정하면 총 근무시간·초과근무가 다시 계산됩니다.</p>
+<hr />
+<h2 id="설정-상세-근무-규칙-탭">6. 설정 상세 (⚙ → 근무 규칙 탭)</h2>
+<ul>
+<li><strong>자리 비움 인정 기준</strong> : 잠깐 신호가 끊겨도 “자리
+비움”으로 보지 않을 유예 시간.</li>
+<li><strong>자동 퇴근</strong> : 오래 신호가 안 잡히면 자동으로 퇴근
+처리.</li>
+<li><strong>퇴근 마진(0~10분)</strong> : 신호 꼬리 오차 보정. 퇴근
+시각을 설정한 분만큼 <strong>앞당겨</strong> 기록합니다.</li>
+<li><strong>점심시간</strong> : 순근무에서 제외할 점심 구간(기본값
+설정).</li>
+<li><strong>주말 표시 / 반차 시간대</strong> 등.</li>
+</ul>
+<p>설정은 <strong>자동 저장</strong>됩니다(별도 저장 버튼 없음). 화면을
+벗어나면 반영됩니다.</p>
+<h2 id="데이터-백업-복구-데이터-탭">7. 데이터 백업 / 복구 (⚙ → 데이터
+탭)</h2>
+<ul>
+<li><strong>백업</strong> : 기록을 JSON 파일로 내보냅니다. 폰
+교체·초기화 전에 백업해 두세요.</li>
+<li><strong>기록 로그에서 복구</strong> : 앱이 별도로 남기는 기록
+로그에서 누락분을 되살립니다 (앱 재설치·DB 손상 시 대비용). 복구 가능한
+건수가 있으면 버튼이 활성화됩니다.</li>
+</ul>
+<hr />
+<h2 id="자주-묻는-질문">8. 자주 묻는 질문</h2>
+<p><strong>Q. 출근/퇴근이 실제와 몇 분 다르게 찍혔어요.</strong> 정상
+범위입니다(맨 위 오차 설명 참고). 기록 탭에서 직접 수정하세요.</p>
+<p><strong>Q. 사무실에 있는데 “퇴근”으로 뜹니다.</strong> 회사
+Wi-Fi/비콘이 등록됐는지(설정 → 감지), 위치 권한이 <strong>“항상
+허용”</strong>인지, Wi-Fi·블루투스가 켜져 있는지 확인하세요. 폰 절전에서
+앱이 “제한 없음”인지도 확인.</p>
+<p><strong>Q. 밤새 폰을 꺼두면 퇴근이 안 찍혀요.</strong>
+절전/재부팅으로 자동 퇴근이 지연될 수 있습니다. 다음 날 앱을 열면 오래된
+세션이 정리되며, 필요하면 기록 탭에서 퇴근 시각을 직접 넣으세요.</p>
+<p><strong>Q. 이 기록을 그대로 근태로 제출해도 되나요?</strong>
+<strong>권장하지 않습니다.</strong> 영역 감지 특성상 오차가 있으니 참고
+자료로 쓰고, 공식 제출 전에는 반드시 본인이 실제 시각과
+대조·수정하세요.</p>
+<hr />
+<p>문의/개선 요청은 배포자에게 전달해 주세요.</p>
+</body>
+</html>
