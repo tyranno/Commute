@@ -28,8 +28,10 @@ interface CommuteDao {
     @Update
     suspend fun update(event: CommuteEvent)
 
+    /** Room runs a multi-entity delete inside one transaction, so a batch either lands whole or not
+     * at all — no half-cleared pile of duplicates if something fails midway. */
     @Delete
-    suspend fun delete(event: CommuteEvent)
+    suspend fun delete(events: List<CommuteEvent>)
 
     @Query("DELETE FROM commute_events")
     suspend fun deleteAll()

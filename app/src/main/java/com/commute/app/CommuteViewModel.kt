@@ -459,7 +459,9 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     /** Fills in a record the service missed (e.g. wifi/permission hiccup, phone off). */
     fun addEvent(event: CommuteEvent) {
-        viewModelScope.launch {
+        // Dispatchers.IO because the journal write is blocking file IO, and an append can trigger a
+        // full-file trim — not something to run on the main thread. Same for the edit/exclude paths.
+        viewModelScope.launch(Dispatchers.IO) {
             val id = dao.insert(event)
             recoveryJournal.append(event.copy(id = id))
         }
@@ -467,7 +469,7 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     /** Corrects a misdetected record (wrong type or time) after the fact. */
     fun updateEvent(event: CommuteEvent) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             dao.update(event)
             // Drop the pre-edit line, then log the corrected one, so the old timestamp doesn't
             // linger in the journal as a phantom "recoverable" record.
@@ -487,31 +489,33 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     /** Brings a record back into 기록보기 and every total computed from it. */
     fun restoreEvent(event: CommuteEvent) = setExcluded(event, false)
 
-    /** Permanently removes a record — unlike [excludeEvent], unrecoverable. For rows [excludeEvent]
-     * alone can't clean up, e.g. a true duplicate left behind by a backup restore: excluding it
-     * would keep it sitting in [excludedEvents] forever, and since the recovery journal matches by
-     * type+timestamp, leaving its journal line behind risks a later [recoverFromJournal]
-     * resurrecting it. Also drops it from the journal so it stays gone. */
-    fun deleteEventPermanently(event: CommuteEvent) {
-        viewModelScope.launch {
-            dao.delete(event)
-            recoveryJournal.remove(event)
-        }
-    }
-
-    /** Bulk form of [deleteEventPermanently], for clearing many excluded duplicates at once
-     * instead of tapping through them one by one. */
+    /**
+     * Permanently removes records — unlike [excludeEvent], unrecoverable. For rows [excludeEvent]
+     * alone can't clean up, e.g. true duplicates left behind by a backup restore: excluding them
+     * would keep them sitting in [excludedEvents] forever, and since the recovery journal matches
+     * by type+timestamp, leaving their journal lines behind risks a later [recoverFromJournal]
+     * resurrecting them. Also drops them from the journal so they stay gone.
+     *
+     * Deletes and journal rewrite happen in one pass on [Dispatchers.IO]: [RecoveryJournal.remove]
+     * rewrites the whole file per call, so removing a few hundred duplicates one-by-one on the main
+     * thread — the exact scale this is built for — would freeze the UI long enough to ANR.
+     *
+     * The closing [RecoveryJournal.reconcile] repairs collateral damage: journal lines are matched
+     * by [journalKey] (type+timestamp), which a *true* duplicate shares with the twin that stays in
+     * the DB, so removing one strips the survivor's line too. Reconciling against what's actually
+     * left puts those lines back instead of silently leaving the survivor unrecoverable.
+     */
     fun deleteEventsPermanently(events: List<CommuteEvent>) {
-        viewModelScope.launch {
-            events.forEach { event ->
-                dao.delete(event)
-                recoveryJournal.remove(event)
-            }
+        if (events.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            dao.delete(events)
+            recoveryJournal.removeAll(events)
+            recoveryJournal.reconcile(dao.getAllOnce())
         }
     }
 
     private fun setExcluded(event: CommuteEvent, excluded: Boolean) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val updated = event.copy(excluded = excluded)
             dao.update(updated)
             // Content changed (the x flag), so the journal line has to be replaced, not just left —

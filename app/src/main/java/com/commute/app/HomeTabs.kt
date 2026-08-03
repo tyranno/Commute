@@ -19,14 +19,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Work
@@ -63,6 +62,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -390,7 +390,6 @@ fun RecordsTab(
             lunchStartMinute = lunchStartMinute,
             lunchEndMinute = lunchEndMinute,
             onRestore = onRestoreEvent,
-            onDelete = { onDeleteEvents(listOf(it)) },
             onDeleteMany = onDeleteEvents,
             onDismiss = { showingExcluded = false }
         )
@@ -399,10 +398,12 @@ fun RecordsTab(
 }
 
 /** Sizing for [ExcludedRecordsDialog]'s dense rows, named so the row's various `.size()`/`.padding()`
- * calls read as one consistent scale instead of scattered magic numbers. */
+ * calls read as one consistent scale instead of scattered magic numbers. Restore is the row's only
+ * action (deleting goes through the checkbox + 선택 삭제 flow), so it can afford a proper touch
+ * target without squeezing the time range back into an ellipsis. */
 private val CompactCheckboxIconSize = 14.dp
 private val CompactCheckboxTouchPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-private val CompactRowActionButtonSize = 24.dp
+private val CompactRowActionButtonSize = 40.dp
 private val CompactRowActionIconSize = 16.dp
 private val CompactRowPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
 private val CompactRowItemSpacing = 2.dp
@@ -410,53 +411,64 @@ private val CompactRowLabelTimeGap = 10.dp
 
 /** A checkbox sized/margined by hand instead of Material3's [androidx.compose.material3.Checkbox],
  * whose internal `requiredSize(20.dp)` ignores any outer size modifier — so callers that need a
- * genuinely compact box (e.g. [ExcludedRecordsDialog]'s dense rows) can't shrink it via modifiers. */
+ * genuinely compact box (e.g. [ExcludedRecordsDialog]'s dense rows) can't shrink it via modifiers.
+ * Uses [toggleable] with [Role.Checkbox] rather than a bare [clickable] so TalkBack still announces
+ * it as a checkbox and reads its checked state, which a plain clickable [Icon] would not. */
 @Composable
 private fun SmallCheckbox(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    label: String,
     modifier: Modifier = Modifier
 ) {
     Icon(
         if (checked) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
-        contentDescription = null,
+        contentDescription = label,
         tint = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier
-            .clickable { onCheckedChange(!checked) }
+            .toggleable(value = checked, onValueChange = onCheckedChange, role = Role.Checkbox)
             .padding(CompactCheckboxTouchPadding)
             .size(CompactCheckboxIconSize)
     )
 }
 
 /** Lists every record the user has excluded from 기록보기, newest first, each with a one-tap
- * restore — the counterpart to the exclude action in [EditEventDialog] — and a permanent delete
- * (tap-to-arm, tap again to confirm, same pattern as [HolidayEditDialog]/leave delete) for rows
- * that are genuine duplicates (e.g. left behind by a backup restore) rather than something to
- * bring back. A checkbox per row plus a "select all" toggle feed [onDeleteMany] so a pile of
- * duplicates (the common case after a backup restore) can be cleared in one confirm instead of
- * one tap-twice per row. Closes itself once the last one is gone rather than leaving an empty
- * dialog open. */
+ * restore — the counterpart to the exclude action in [EditEventDialog].
+ *
+ * Permanent deletion (for rows that are genuine duplicates, e.g. left behind by a backup restore,
+ * rather than something to bring back) runs *only* through the per-row checkbox plus the "select
+ * all" toggle, which feed [onDeleteMany] behind a single confirm. There is deliberately no per-row
+ * delete button: it would sit a couple of dp from restore at icon size, putting the one
+ * irreversible action in this dialog within mis-tap range of the reversible one. Routing every
+ * delete through an explicit selection keeps the destructive path something you opt into.
+ *
+ * Closes itself once the last one is gone rather than leaving an empty dialog open. */
 @Composable
 private fun ExcludedRecordsDialog(
     events: List<CommuteEvent>,
     lunchStartMinute: Int,
     lunchEndMinute: Int,
     onRestore: (CommuteEvent) -> Unit,
-    onDelete: (CommuteEvent) -> Unit,
     onDeleteMany: (List<CommuteEvent>) -> Unit,
     onDismiss: () -> Unit
 ) {
     val s = LocalStrings.current
-    var confirmingDeleteId by remember { mutableStateOf<Long?>(null) }
     var confirmingDeleteSelected by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<Long>()) }
+    // Every selection change disarms a pending confirm. Without this an armed "정말 삭제?" survives
+    // the selection changing underneath it, so tapping it once would wipe a *different* set of rows
+    // than the one the user confirmed — e.g. arm on one row, then hit 전체 선택, then one tap.
+    val setSelection: (Set<Long>) -> Unit = { ids ->
+        selectedIds = ids
+        confirmingDeleteSelected = false
+    }
     LaunchedEffect(events.isEmpty()) {
         if (events.isEmpty()) onDismiss()
     }
     // Selection can go stale once a restore/delete elsewhere drops an id out of `events`.
     LaunchedEffect(events) {
         val liveIds = events.map { it.id }.toSet()
-        if (selectedIds.any { it !in liveIds }) selectedIds = selectedIds.intersect(liveIds)
+        if (selectedIds.any { it !in liveIds }) setSelection(selectedIds.intersect(liveIds))
     }
     val sorted = events.sortedByDescending { it.timestamp }
     AlertDialog(
@@ -478,8 +490,9 @@ private fun ExcludedRecordsDialog(
                             SmallCheckbox(
                                 checked = selectedIds.isNotEmpty() && selectedIds.size == sorted.size,
                                 onCheckedChange = { checkAll ->
-                                    selectedIds = if (checkAll) sorted.map { it.id }.toSet() else emptySet()
-                                }
+                                    setSelection(if (checkAll) sorted.map { it.id }.toSet() else emptySet())
+                                },
+                                label = s.selectAll
                             )
                             Text(s.selectAll, style = MaterialTheme.typography.bodyMedium)
                         }
@@ -487,8 +500,7 @@ private fun ExcludedRecordsDialog(
                             TextButton(onClick = {
                                 if (confirmingDeleteSelected) {
                                     onDeleteMany(sorted.filter { it.id in selectedIds })
-                                    selectedIds = emptySet()
-                                    confirmingDeleteSelected = false
+                                    setSelection(emptySet())
                                 } else {
                                     confirmingDeleteSelected = true
                                 }
@@ -509,18 +521,22 @@ private fun ExcludedRecordsDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(CompactRowItemSpacing)
                             ) {
+                                val typeLabel = when (event.type) {
+                                    CommuteEventType.ARRIVE -> s.eventArrive
+                                    CommuteEventType.LEAVE -> s.eventLeave
+                                    CommuteEventType.AWAY -> s.eventAway
+                                }
                                 SmallCheckbox(
                                     checked = event.id in selectedIds,
                                     onCheckedChange = { checked ->
-                                        selectedIds = if (checked) selectedIds + event.id else selectedIds - event.id
-                                    }
+                                        setSelection(
+                                            if (checked) selectedIds + event.id else selectedIds - event.id
+                                        )
+                                    },
+                                    label = typeLabel
                                 )
                                 Text(
-                                    when (event.type) {
-                                        CommuteEventType.ARRIVE -> s.eventArrive
-                                        CommuteEventType.LEAVE -> s.eventLeave
-                                        CommuteEventType.AWAY -> s.eventAway
-                                    },
+                                    typeLabel,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -539,24 +555,6 @@ private fun ExcludedRecordsDialog(
                                     Icon(
                                         Icons.Filled.Restore,
                                         contentDescription = s.restoreAction,
-                                        modifier = Modifier.size(CompactRowActionIconSize)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (confirmingDeleteId == event.id) {
-                                            onDelete(event)
-                                            confirmingDeleteId = null
-                                        } else {
-                                            confirmingDeleteId = event.id
-                                        }
-                                    },
-                                    modifier = Modifier.size(CompactRowActionButtonSize)
-                                ) {
-                                    Icon(
-                                        if (confirmingDeleteId == event.id) Icons.Filled.DeleteForever else Icons.Filled.Delete,
-                                        contentDescription = if (confirmingDeleteId == event.id) s.reallyDelete else s.delete,
-                                        tint = MaterialTheme.colorScheme.error,
                                         modifier = Modifier.size(CompactRowActionIconSize)
                                     )
                                 }

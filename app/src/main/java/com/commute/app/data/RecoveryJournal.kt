@@ -57,12 +57,20 @@ class RecoveryJournal(context: Context) {
 
     /** Drops every journal line whose id or content matches [event] — for a user-initiated delete
      * or the old half of an edit, so a corrected/removed record doesn't linger as "recoverable". */
-    fun remove(event: CommuteEvent) {
+    fun remove(event: CommuteEvent) = removeAll(listOf(event))
+
+    /** Bulk [remove]: rewrites the file once for the whole batch instead of once per event. Deleting
+     * a few hundred duplicates through [remove] would re-read and re-write up to [MAX_LINES] lines
+     * that many times over; here it's a single read and a single write however long the batch is. */
+    fun removeAll(events: List<CommuteEvent>) {
+        if (events.isEmpty()) return
         synchronized(lock) {
             try {
                 if (!file.exists()) return
+                val doomedIds = events.mapNotNull { it.id.takeIf { id -> id != 0L } }.toHashSet()
+                val doomedKeys = events.map { journalKey(it) }.toHashSet()
                 val kept = readEntriesLocked().filterNot {
-                    (event.id != 0L && it.id == event.id) || journalKey(it) == journalKey(event)
+                    it.id in doomedIds || journalKey(it) in doomedKeys
                 }
                 writeAllLocked(kept)
             } catch (e: Exception) {
