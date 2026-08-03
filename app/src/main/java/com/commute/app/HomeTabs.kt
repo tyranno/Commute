@@ -789,7 +789,11 @@ private fun WeeklyRangeChart(
             )
             days.forEachIndexed { index, day ->
                 val left = chartLeft + index * slotWidth + (slotWidth - barWidth) / 2f
-                val alpha = if (day == today) 1f else 0.55f
+                // Today reads as today, but the rest of the week still has to be legible: at 0.55
+                // four days out of five were washed out, which flattened the whole chart and threw
+                // away the separation between 근무, 초과 and 점심 that the palette exists to give.
+                // 0.82 keeps today distinctly forward without draining the days around it.
+                val alpha = if (day == today) 1f else 0.82f
 
                 // A synced or user-declared holiday renders the same hollow dashed block as a
                 // declared leave (rather than tinting the whole column), spanning the full workday
