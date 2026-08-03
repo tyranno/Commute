@@ -28,6 +28,34 @@ enum class AppLanguage(val tag: String) {
 /** The concrete language actually rendered — [AppLanguage.SYSTEM] collapses to one of these. */
 enum class Lang { KO, EN }
 
+/**
+ * Light/dark preference. [SYSTEM] is the default and the behaviour the app has always had; the two
+ * explicit choices exist because this is a screen people glance at in an office, where wanting it
+ * light while the rest of the phone is dark (or the reverse) is a real preference rather than a
+ * theoretical one.
+ *
+ * Stored by [tag] like [AppLanguage], so the two settings round-trip through DataStore the same way
+ * and an unknown value read back falls to the system default rather than throwing.
+ */
+enum class AppTheme(val tag: String) {
+    SYSTEM("system"),
+    LIGHT("light"),
+    DARK("dark");
+
+    /** Collapses the three-way choice to the boolean the theme actually needs, with [systemDark]
+     * (what the device is currently set to) standing in for [SYSTEM] — the counterpart to
+     * [AppLanguage.resolve]. */
+    fun resolveDark(systemDark: Boolean): Boolean = when (this) {
+        SYSTEM -> systemDark
+        LIGHT -> false
+        DARK -> true
+    }
+
+    companion object {
+        fun fromTag(tag: String?): AppTheme = entries.firstOrNull { it.tag == tag } ?: SYSTEM
+    }
+}
+
 /** [AppLanguage.SYSTEM] follows the device: English only when the device language is English,
  * otherwise Korean (the app's default market). */
 fun AppLanguage.resolve(deviceLanguage: String): Lang = when (this) {
@@ -258,6 +286,12 @@ interface Strings {
     val languageSystem: String
     val languageKorean: String
     val languageEnglish: String
+
+    // --- theme ---
+    val themeCardTitle: String
+    val themeSystem: String
+    val themeLight: String
+    val themeDark: String
     val resetCardTitle: String
     val resetDescription: String
     val resetButton: String
@@ -562,6 +596,11 @@ object KoStrings : Strings {
     override val languageSystem = "시스템 기본"
     override val languageKorean = "한국어"
     override val languageEnglish = "English"
+
+    override val themeCardTitle = "화면 테마"
+    override val themeSystem = "시스템 기본"
+    override val themeLight = "밝게"
+    override val themeDark = "어둡게"
     override val resetCardTitle = "데이터 초기화"
     override val resetDescription = "출퇴근 기록과 연차/반차/외출 기록을 모두 삭제합니다. 회사 Wi-Fi·비콘 등록과 설정은 그대로 유지됩니다. 삭제된 기록은 되돌릴 수 없습니다."
     override val resetButton = "기록 전체 삭제"
@@ -854,6 +893,11 @@ object EnStrings : Strings {
     override val languageSystem = "System default"
     override val languageKorean = "한국어"
     override val languageEnglish = "English"
+
+    override val themeCardTitle = "Appearance"
+    override val themeSystem = "System default"
+    override val themeLight = "Light"
+    override val themeDark = "Dark"
     override val resetCardTitle = "Reset data"
     override val resetDescription = "Deletes all commute records and leave entries. Office Wi-Fi/beacon registration and settings are kept. Deleted records can't be recovered."
     override val resetButton = "Delete all records"

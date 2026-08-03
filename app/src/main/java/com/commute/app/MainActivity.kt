@@ -16,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -106,8 +107,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            CommuteTheme {
-                CommuteApp()
+            // The ViewModel is hoisted above CommuteTheme because the theme choice lives in it and
+            // has to be read *before* the theme is applied. It still resolves against the activity's
+            // store, so this is the same instance CommuteApp would otherwise have created.
+            val viewModel: CommuteViewModel = viewModel()
+            val theme by viewModel.theme.collectAsState()
+            CommuteTheme(darkTheme = theme.resolveDark(isSystemInDarkTheme())) {
+                CommuteApp(viewModel)
             }
         }
     }

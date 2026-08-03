@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.BeachAccess
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Restaurant
@@ -115,6 +116,7 @@ fun SettingsScreen(
     val showWeekend by viewModel.showWeekend.collectAsState()
     val recoverableCount by viewModel.recoverableCount.collectAsState()
     val language by viewModel.language.collectAsState()
+    val theme by viewModel.theme.collectAsState()
     val updateStatus by viewModel.updateStatus.collectAsState()
     val s = LocalStrings.current
     val context = LocalContext.current
@@ -399,6 +401,16 @@ fun SettingsScreen(
                         }
                     }
 
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Filled.DarkMode, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(s.themeCardTitle, style = MaterialTheme.typography.titleSmall)
+                            }
+                            ThemeSelector(current = theme, onSelect = viewModel::setTheme)
+                        }
+                    }
+
                     // The Play build updates through Play and has no updater of its own, so it shows
                     // the version on its own rather than a card whose only control is a dead
                     // "확인" button. See update/UpdateActions.kt for why the capability is
@@ -560,6 +572,45 @@ private fun LanguageSelector(current: AppLanguage, onSelect: (AppLanguage) -> Un
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             AppLanguage.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(label(option)) },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** The light/dark counterpart of [LanguageSelector], deliberately the same control: both are a
+ * "system default, or override it" choice, and reading as one pair is worth more than picking a
+ * different widget for the sake of variety. Applies instantly — [AppTheme] feeds
+ * [com.commute.app.ui.theme.CommuteTheme] straight from the ViewModel, so nothing restarts. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThemeSelector(current: AppTheme, onSelect: (AppTheme) -> Unit) {
+    val s = LocalStrings.current
+    fun label(theme: AppTheme) = when (theme) {
+        AppTheme.SYSTEM -> s.themeSystem
+        AppTheme.LIGHT -> s.themeLight
+        AppTheme.DARK -> s.themeDark
+    }
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = label(current),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(s.themeCardTitle) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            AppTheme.entries.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(label(option)) },
                     onClick = {

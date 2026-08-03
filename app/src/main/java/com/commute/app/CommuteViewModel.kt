@@ -185,6 +185,10 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
     val language: StateFlow<AppLanguage> = settingsRepository.language
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppLanguage.SYSTEM)
 
+    /** Selected light/dark appearance — drives [CommuteTheme]'s `darkTheme`. */
+    val theme: StateFlow<AppTheme> = settingsRepository.theme
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppTheme.SYSTEM)
+
     /** The string table for the currently-selected language, for toasts shown from here (outside
      * Compose, so [LocalStrings] isn't available). */
     private suspend fun strings(): Strings = stringsFor(settingsRepository.language.first())
@@ -376,6 +380,10 @@ class CommuteViewModel(application: Application) : AndroidViewModel(application)
 
     fun setHalfDayPmWindow(startMinute: Int, endMinute: Int) {
         viewModelScope.launch { settingsRepository.setHalfDayPmWindow(startMinute, endMinute) }
+    }
+
+    fun setTheme(theme: AppTheme) {
+        viewModelScope.launch { settingsRepository.setTheme(theme) }
     }
 
     fun setLanguage(language: AppLanguage) {

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.commute.app.AppLanguage
+import com.commute.app.AppTheme
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -46,11 +47,17 @@ class SettingsRepository(private val context: Context) {
         val HALF_PM_START_MINUTE = intPreferencesKey("half_pm_start_minute")
         val HALF_PM_END_MINUTE = intPreferencesKey("half_pm_end_minute")
         val LANGUAGE = stringPreferencesKey("language")
+        val THEME = stringPreferencesKey("theme")
     }
 
     /** Selected UI language. [AppLanguage.SYSTEM] (the default) follows the device — Korean unless
      * the device language is English. Stored as the language tag; unknown/absent → SYSTEM. */
     val language: Flow<AppLanguage> = context.dataStore.data.map { AppLanguage.fromTag(it[Keys.LANGUAGE]) }
+
+    /** Selected light/dark appearance. [AppTheme.SYSTEM] (the default) follows the device, which is
+     * how the app behaved before this setting existed, so an upgrade changes nothing until the user
+     * picks otherwise. Stored as the tag; unknown/absent → SYSTEM. */
+    val theme: Flow<AppTheme> = context.dataStore.data.map { AppTheme.fromTag(it[Keys.THEME]) }
 
     /** Every registered office Wi-Fi network — checked with OR (see [detectCompanyNetworks][com.commute.app.wifi.detectCompanyNetworks]),
      * the same way Wi-Fi and BLE presence are already OR'd together. Falls back to a single-element
@@ -277,6 +284,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLanguage(language: AppLanguage) {
         context.dataStore.edit { it[Keys.LANGUAGE] = language.tag }
+    }
+
+    suspend fun setTheme(theme: AppTheme) {
+        context.dataStore.edit { it[Keys.THEME] = theme.tag }
     }
 
     companion object {
