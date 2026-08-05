@@ -27,8 +27,8 @@ android {
         applicationId = "com.commute.tyranno"
         minSdk = 24
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.5.3"
+        versionCode = 9
+        versionName = "0.5.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -102,6 +102,33 @@ android {
     buildFeatures {
         compose = true
     }
+}
+
+// Release artifacts land in build/outputs under generic AGP-chosen names
+// (app-play-release.aab, app-github-release.apk) that are identical across
+// flavors and versions, so a manually copied dist/ file gives no clue which
+// channel or version it is. These tasks stage each flavor's release artifact
+// into dist/ under a name that encodes both: which store it's for (play/github)
+// and which version it is.
+val distDir = rootProject.layout.projectDirectory.dir("dist")
+
+tasks.register<Copy>("distPlayBundle") {
+    dependsOn("bundlePlayRelease")
+    from(layout.buildDirectory.file("outputs/bundle/playRelease/app-play-release.aab"))
+    into(distDir)
+    rename { "Commute-play-${android.defaultConfig.versionName}.aab" }
+}
+
+tasks.register<Copy>("distGithubApk") {
+    dependsOn("assembleGithubRelease")
+    from(layout.buildDirectory.file("outputs/apk/github/release/app-github-release.apk"))
+    into(distDir)
+    rename { "Commute-github-${android.defaultConfig.versionName}.apk" }
+}
+
+tasks.register("dist") {
+    description = "Stage this version's Play (.aab) and GitHub (.apk) release artifacts into dist/ with channel-specific names."
+    dependsOn("distPlayBundle", "distGithubApk")
 }
 
 dependencies {

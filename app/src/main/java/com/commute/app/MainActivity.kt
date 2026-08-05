@@ -412,7 +412,7 @@ fun CommuteScreen(viewModel: CommuteViewModel = viewModel(), onOpenSettings: () 
                     companySsid = representativeSsid,
                     isCurrentSsidRegistered = companyNetworks.any { it.ssid == currentSsid },
                     monitoringEnabled = monitoringEnabled,
-                    switchEnabled = companyNetworks.isNotEmpty(),
+                    switchEnabled = companyNetworks.isNotEmpty() || (bleEnabled && companyBeaconIds.isNotEmpty()),
                     onRegister = { currentSsid?.let(viewModel::registerCompanySsid) },
                     onOpenWifiSearch = { showWifiSearch = true },
                     onOpenBeaconSearch = {
